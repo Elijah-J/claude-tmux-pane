@@ -1,0 +1,6 @@
+{
+  "name": "tmux",
+  "version": "0.1.0",
+  "description": "A pane listing the interactive Claude Code sessions in the current tmux session, highlighting the one facing the user.",
+  "types": "./types/index.d.ts"
+}

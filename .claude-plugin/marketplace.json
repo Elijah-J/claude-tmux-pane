@@ -1,0 +1,5 @@
+{
+  "name": "claude-tmux-pane",
+  "owner": { "name": "Elijah-J" },
+  "plugins": [{ "name": "tmux", "source": "./" }]
+}
