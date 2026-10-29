@@ -1,6 +1,8 @@
 export type TmuxPane = {
   /** The tmux pane id, e.g. "%3". */
   id: string
+  /** The tmux id of the window holding the pane, e.g. "@3". */
+  windowId: string
   /** Display name: the pane title (its ✳ state glyph and session title), else the pane id. */
   name: string
   /** tmux's current foreground command for the pane; a Claude pane reports its version. */

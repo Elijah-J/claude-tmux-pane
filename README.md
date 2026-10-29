@@ -9,6 +9,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 - One row per tmux pane that is running Claude Code, named by that session's title.
 - The session **facing you** — the active pane of the active window — is bold, colored, and marked with `▶`. The rest are dimmed.
 - Panes that aren't running Claude Code (plain shells, other programs) are left out.
+- Click a row (or focus it and press Enter) to bring that session to the front: its tmux window becomes the current one and its pane the active pane.
 - The list refreshes every couple of seconds.
 
 A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`); an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
