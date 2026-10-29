@@ -1,6 +1,14 @@
 {
   "name": "tmux",
-  "version": "0.2.1",
-  "description": "A pane listing the interactive Claude Code sessions in the current tmux session, highlighting the one facing the user; click one to bring it to the front.",
-  "types": "./types/index.d.ts"
+  "version": "0.3.0",
+  "description": "A pane listing the interactive Claude Code sessions in the current tmux session, highlighting the one facing the user; click one to bring it to the front, or [new] to start another.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "new_session_command": {
+      "type": "string",
+      "title": "New session command",
+      "description": "The command line the [new] row types into the new tmux window's shell",
+      "default": "claude"
+    }
+  }
 }

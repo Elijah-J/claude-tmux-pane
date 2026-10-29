@@ -31,6 +31,21 @@ const snapshot = atom(
   { shape: 'tmux-2' },
 )
 
+// The spinner frame of the [new] row while it starts a session; null when idle.
+const launching = atom(
+  { plugin: 'tmux', key: 'launching' } as const,
+  null as number | null,
+)
+
+// Claude Code's own spinner frames, turned once per readiness check.
+const FRAMES = ['◐', '◓', '◑', '◒']
+const TICK_MS = 150
+// Switch even to a session that never reads as ready, so its window shows why.
+const READY_TIMEOUT_MS = 20_000
+
+// The session's working directory, where [new] starts its session.
+let cwd: string | undefined
+
 // A tmux pane running Claude Code reports its version (e.g. "2.1.312") as the
 // current command; a plain shell reports "zsh"/"bash", so this filters out the
 // non-Claude windows and panes.
@@ -82,12 +97,60 @@ async function refresh($: EngineInterface): Promise<void> {
 // Bring a row's pane to the front: make it the active pane of its window, then
 // make that window the current one. Pane and window IDs are unique for the life
 // of the tmux server, so neither target can hit the wrong pane or window.
-async function bringToFront($: EngineInterface, row: TmuxPane): Promise<void> {
+async function bringToFront(
+  $: EngineInterface,
+  row: Pick<TmuxPane, 'id' | 'windowId'>,
+): Promise<void> {
   await $.process.run(['tmux', 'select-pane', '-t', row.id])
   await $.process.run(['tmux', 'select-window', '-t', row.windowId])
   // Every session re-probes, this one included. A pane closed since the last
   // probe fails both selects, and the probe drops it.
   await $.process.run(['tmux', 'wait-for', '-S', CHANNEL])
+}
+
+// Open a new window in this tmux session, start Claude Code in it, and bring it
+// to the front once the new session waits for input.
+async function startSession($: EngineInterface, command: string): Promise<void> {
+  await update($, launching, () => 0)
+  try {
+    // Given no command, tmux runs a login shell in the new window, as the
+    // sessions here run in; -d keeps this window in front while the row spins.
+    const created = await $.process.run([
+      'tmux',
+      'new-window',
+      '-d',
+      '-P',
+      '-F',
+      `#{window_id}${SEP}#{pane_id}`,
+      ...(cwd ? ['-c', cwd] : []),
+    ])
+    if (created.exitCode !== 0) return
+    const [windowId = '', id = ''] = created.stdout.trim().split(SEP)
+    // Typed into that shell, the command runs as if typed by hand.
+    await $.process.run(['tmux', 'send-keys', '-t', id, '-l', command])
+    await $.process.run(['tmux', 'send-keys', '-t', id, 'Enter'])
+
+    for (let tick = 1; tick * TICK_MS <= READY_TIMEOUT_MS; tick++) {
+      const shown = await $.process.run([
+        'tmux',
+        'display',
+        '-p',
+        '-t',
+        id,
+        `#{pane_current_command}${SEP}#{pane_title}`,
+      ])
+      // The window was closed while starting.
+      if (shown.exitCode !== 0) return
+      const [current = '', title = ''] = shown.stdout.trim().split(SEP)
+      // Claude Code titles its pane with ✳ once it waits for input.
+      if (isClaude(current) && title.startsWith('✳')) break
+      await $.clock.sleep(TICK_MS)
+      await update($, launching, () => tick)
+    }
+    await bringToFront($, { id, windowId })
+  } finally {
+    await update($, launching, () => null)
+  }
 }
 
 // Re-probe each time the channel is signalled, for the session's life. The
@@ -107,12 +170,17 @@ async function watchClicks($: EngineInterface): Promise<void> {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const newSessionCommand = String(options.new_session_command)
+
   on('session.start', async ($, e, next) => {
+    cwd = e.cwd
     await $.command.register({
       name: 'tmux',
       description: 'Show the interactive Claude Code sessions in this tmux session',
     })
+    // A start a reload cut short leaves its frame behind.
+    await update($, launching, () => null)
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
     void watchClicks($)
@@ -142,6 +210,7 @@ export const register: Register = on => {
     }
 
     const { rows } = snap
+    const frame = await read($, launching)
 
     return (
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
@@ -166,6 +235,22 @@ export const register: Register = on => {
             </Text>
           </Button>
         ))}
+        {frame === null ? (
+          <Box marginLeft={2}>
+            <Button
+              key="new"
+              label="[new]"
+              plain
+              dimColor
+              onPress={() => void startSession($, newSessionCommand)}
+            />
+          </Box>
+        ) : (
+          <Text dimColor>
+            {'  '}
+            {FRAMES[frame % FRAMES.length]} starting Claude Code…
+          </Text>
+        )}
       </Box>
     )
   })

@@ -20,6 +20,10 @@ export type TmuxSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    tmux: { snapshot: Shaped<TmuxSnapshot> }
+    tmux: {
+      snapshot: Shaped<TmuxSnapshot>
+      /** The [new] row's spinner frame while it starts a session; null when idle. */
+      launching: number | null
+    }
   }
 }
