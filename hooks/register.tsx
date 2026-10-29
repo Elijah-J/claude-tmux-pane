@@ -5,6 +5,12 @@ import type { TmuxPane, TmuxSnapshot } from '../types'
 
 const PANE = 'tmux-sessions'
 
+// A click signals this tmux channel and every session's mod waits on it, so the
+// session coming to the front redraws its highlight at once, not on its next
+// poll. `tmux wait-for -S` wakes every waiter, and a signal sent while nobody
+// waits is kept for the next wait alone.
+const CHANNEL = 'claude-tmux-pane'
+
 // Field separator for tmux -F output: the ASCII unit separator never appears in
 // a pane title or command, so splitting on it is collision-proof.
 const SEP = '\x1f'
@@ -79,8 +85,26 @@ async function refresh($: EngineInterface): Promise<void> {
 async function bringToFront($: EngineInterface, row: TmuxPane): Promise<void> {
   await $.process.run(['tmux', 'select-pane', '-t', row.id])
   await $.process.run(['tmux', 'select-window', '-t', row.windowId])
-  // A pane closed since the last probe fails both selects; the probe drops it.
-  await refresh($)
+  // Every session re-probes, this one included. A pane closed since the last
+  // probe fails both selects, and the probe drops it.
+  await $.process.run(['tmux', 'wait-for', '-S', CHANNEL])
+}
+
+// Re-probe each time the channel is signalled, for the session's life. The
+// module unloading kills the waiting child, which ends the loop.
+async function watchClicks($: EngineInterface): Promise<void> {
+  for (;;) {
+    const wait = $.process.spawn({ argv: ['tmux', 'wait-for', CHANNEL] })
+    try {
+      // tmux wait-for prints nothing; the loop ends when it exits.
+      for await (const _ of wait);
+    } catch {
+      return
+    }
+    const { code } = await wait.result
+    if (code !== 0) return
+    await refresh($)
+  }
 }
 
 export const register: Register = on => {
@@ -91,6 +115,7 @@ export const register: Register = on => {
     })
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
+    void watchClicks($)
     // Keep the list live; a hot reload drops this timer with the module.
     $.clock.every(2000, () => void refresh($))
 
