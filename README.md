@@ -20,8 +20,8 @@ A pane is detected as Claude Code by its tmux `pane_current_command`, which Clau
 
 The state comes from two places:
 
-- **Claude Code's session registry,** `~/.claude/sessions/<pid>.json`. Each interactive session's file names its tmux pane (`"tmux": "<session>:<window_id>.<pane_id>"`) and its `status`. A `busy` status reads Active, and any other status reads Idle. Where a crash left a second file for the same pane, the newest `startedAt` counts. A file that can't be read (a session exiting mid-poll) is skipped, and an unreadable registry leaves every unmarked row Idle.
-- **The pane's `@claude_state` user option,** which a session sets on its own pane. `pending` reads Needs you, and it wins over a busy status. `active` reads Active. Anything else, or no option at all, defers to the registry. A session marks its pane with:
+- **Claude Code's session registry,** `~/.claude/sessions/<pid>.json`. Each interactive session's file names its tmux pane (`"tmux": "<session>:<window_id>.<pane_id>"`) and its `status`. A `waiting` status, which Claude Code sets while a permission prompt waits on you, reads Needs you; a `busy` status reads Active; any other status reads Idle. Where a crash left a second file for the same pane, the newest `startedAt` counts. A file that can't be read (a session exiting mid-poll) is skipped, and an unreadable registry leaves every unmarked row Idle.
+- **The pane's `@claude_state` user option,** which a session sets on its own pane. `pending` reads Needs you, and it wins over a busy status. `active` reads Active, unless the registry says `waiting`. Anything else, or no option at all, defers to the registry. A session marks its pane with:
 
   ```
   tmux set-option -p -t "$TMUX_PANE" @claude_state pending   # or active, idle

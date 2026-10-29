@@ -238,7 +238,8 @@ const SESSIONS = `${HOME}/.claude/sessions`
 
 // Claude Code's session registry as measured on 2026-10-29: one file per
 // running session, naming its tmux pane ("<session>:<window_id>.<pane_id>"),
-// its kind and its status ("busy" while it works).
+// its kind and its status ("busy" while it works, "waiting" on a permission
+// prompt).
 const entry = (pid: number, tmux: string, status: string, startedAt: number, kind = 'interactive') =>
   JSON.stringify({ pid, sessionId: `s-${pid}`, kind, entrypoint: 'cli', status, startedAt, statusUpdatedAt: startedAt, tmux })
 
@@ -368,6 +369,23 @@ test('the state follows the next poll: a session that goes idle, a pane that tur
   await clock.advance(2000)
 
   expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Needs you')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('a session waiting on a permission prompt reads Needs you, over an active mark', async ($, on) => {
+  fakeRegistry(on, {
+    [`${SESSIONS}/300.json`]: entry(300, '2:@3.%3', 'waiting', 1),
+    [`${SESSIONS}/500.json`]: entry(500, '2:@5.%5', 'waiting', 1),
+  })
+  const { tmux } = await start($, on, 1)
+  const marked = tmux.panes.find(p => p.pane === '%5')
+  if (marked) marked.mark = 'active'
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await rowText(ui, '%3')).endsWith(' -- Needs you')).toBe(true)
   expect((await rowText(ui, '%5')).endsWith(' -- Needs you')).toBe(true)
   await ui.unmount()
   tmux.unload()

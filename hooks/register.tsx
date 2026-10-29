@@ -36,7 +36,8 @@ const snapshot = atom(
 
 // Claude Code's session registry: one file per running session, naming the
 // tmux pane it runs in ("<session>:<window_id>.<pane_id>") and its status,
-// "busy" while it works.
+// "busy" while it works and "waiting" while a permission prompt waits on the
+// person (measured 2026-10-29).
 const SESSIONS_DIR = '.claude/sessions'
 
 type Registered = { status: string; startedAt: number }
@@ -86,10 +87,10 @@ async function registry($: EngineInterface): Promise<Map<string, Registered>> {
   return byPane
 }
 
-// Needs you while the pane is marked pending; active while it is marked active
-// or its session is busy; idle otherwise.
+// Needs you while the pane is marked pending or its session is waiting; active
+// while it is marked active or its session is busy; idle otherwise.
 function stateOf(mark: string, status: string | undefined): SessionState {
-  if (mark === 'pending') return 'needs-you'
+  if (mark === 'pending' || status === 'waiting') return 'needs-you'
   if (mark === 'active' || status === 'busy') return 'active'
 
   return 'idle'
