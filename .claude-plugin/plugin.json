@@ -1,7 +1,7 @@
 {
   "name": "tmux",
-  "version": "0.4.1",
-  "description": "A pane listing the interactive Claude Code sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, or [new] to start another.",
+  "version": "0.5.0",
+  "description": "A pane listing the interactive Claude Code sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, its [x] twice to close it, or [new] to start another.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "new_session_command": {

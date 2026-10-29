@@ -11,6 +11,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 - Each row ends with the session's state: ` -- Active` in green while it works, ` -- Needs you` in bold yellow while it waits on you, ` -- Idle` in white otherwise. The state keeps its color on dimmed rows.
 - Panes that aren't running Claude Code (plain shells, other programs) are left out.
 - Click a row (or focus it and press Enter) to bring that session to the front: its tmux window becomes the current one and its pane the active pane.
+- Click a row's `[x]` to close that session: it turns into `[close?]` for 3 seconds, and a second click kills the session's tmux pane (and its window, where that was the window's only pane). Without the second click it turns back to `[x]`.
 - The list refreshes every couple of seconds, and in every session at once when you click a row, so the highlight is already right in the session you land on.
 - `[new]` at the bottom opens a new tmux window, starts Claude Code in it, spins while it loads, and switches to it once it is ready for input.
 

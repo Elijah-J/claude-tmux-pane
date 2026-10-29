@@ -29,6 +29,8 @@ declare module 'claude-code' {
       snapshot: Shaped<TmuxSnapshot>
       /** The [new] row's spinner frame while it starts a session; null when idle. */
       launching: number | null
+      /** The pane whose [x] was pressed once and asks [close?]; null when none. */
+      closing: string | null
     }
   }
 }

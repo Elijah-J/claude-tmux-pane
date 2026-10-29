@@ -110,6 +110,17 @@ const launching = atom(
   null as number | null,
 )
 
+// The pane whose [x] was pressed once and now asks [close?]; null when none.
+const closing = atom(
+  { plugin: 'tmux', key: 'closing' } as const,
+  null as string | null,
+)
+
+// How long a pressed [x] waits for the second press before it turns back.
+const CONFIRM_MS = 3000
+// Each first press counts; a wait ends its ask only if no later press re-asked.
+let asks = 0
+
 // Claude Code's own spinner frames, turned once per readiness check.
 const FRAMES = ['◐', '◓', '◑', '◒']
 const TICK_MS = 150
@@ -188,6 +199,39 @@ async function bringToFront(
   await $.process.run(['tmux', 'wait-for', '-S', CHANNEL])
 }
 
+// Close a row's session by killing its pane, which ends the Claude Code running
+// there, and its window too where it was the window's only pane. Like a select,
+// a kill of a pane closed since the last probe fails rather than hitting another.
+async function closeSession($: EngineInterface, row: Pick<TmuxPane, 'id'>): Promise<void> {
+  await $.process.run(['tmux', 'kill-pane', '-t', row.id])
+  // Every session drops the row at once; one that closed itself is gone, and
+  // the others catch it on their next poll.
+  await $.process.run(['tmux', 'wait-for', '-S', CHANNEL])
+}
+
+// The first press on a row's [x] asks [close?]; a second press within
+// CONFIRM_MS closes the session. Asking on another row moves the ask there.
+async function pressClose($: EngineInterface, row: Pick<TmuxPane, 'id'>): Promise<void> {
+  let isConfirmed = false
+  await update($, closing, id => {
+    isConfirmed = id === row.id
+    return isConfirmed ? null : row.id
+  })
+  if (isConfirmed) {
+    await closeSession($, row)
+    return
+  }
+
+  const ask = ++asks
+  try {
+    await $.clock.sleep(CONFIRM_MS)
+  } catch {
+    // The module unloaded mid-wait; the next session.start clears the ask.
+    return
+  }
+  if (ask === asks) await update($, closing, id => (id === row.id ? null : id))
+}
+
 // Open a new window in this tmux session, start Claude Code in it, and bring it
 // to the front once the new session waits for input.
 async function startSession($: EngineInterface, command: string): Promise<void> {
@@ -259,8 +303,9 @@ export const register: Register = (on, options) => {
       name: 'tmux',
       description: 'Show the interactive Claude Code sessions in this tmux session',
     })
-    // A start a reload cut short leaves its frame behind.
+    // A start a reload cut short leaves its frame behind, and an ask its [close?].
     await update($, launching, () => null)
+    await update($, closing, () => null)
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
     void watchClicks($)
@@ -291,6 +336,7 @@ export const register: Register = (on, options) => {
 
     const { rows } = snap
     const frame = await read($, launching)
+    const asking = await read($, closing)
 
     return (
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
@@ -299,28 +345,43 @@ export const register: Register = (on, options) => {
           <Text dimColor>No Claude Code sessions in this tmux session.</Text>
         )}
         {rows.map(row => (
-          // One press anywhere on the row brings its window to the front.
-          <Button
-            key={row.id}
-            plain
-            onPress={() => void bringToFront($, row)}
-          >
-            <Text
-              color={row.isActive ? 'claude' : undefined}
-              weight={row.isActive ? 'bold' : undefined}
-              dimColor={!row.isActive}
+          <Box key={`row:${row.id}`}>
+            {/* One press anywhere on the row brings its window to the front. */}
+            <Button
+              key={row.id}
+              plain
+              onPress={() => void bringToFront($, row)}
             >
-              {row.isActive ? '▶ ' : '  '}
-              {row.name}
-            </Text>
-            <Text
-              color={SUFFIX[row.state].color}
-              weight={SUFFIX[row.state].weight}
-              dimColor={false}
-            >
-              {SUFFIX[row.state].text}
-            </Text>
-          </Button>
+              <Text
+                color={row.isActive ? 'claude' : undefined}
+                weight={row.isActive ? 'bold' : undefined}
+                dimColor={!row.isActive}
+              >
+                {row.isActive ? '▶ ' : '  '}
+                {row.name}
+              </Text>
+              <Text
+                color={SUFFIX[row.state].color}
+                weight={SUFFIX[row.state].weight}
+                dimColor={false}
+              >
+                {SUFFIX[row.state].text}
+              </Text>
+            </Button>
+            <Box marginLeft={1}>
+              <Button
+                key={`close:${row.id}`}
+                plain
+                onPress={() => void pressClose($, row)}
+              >
+                {asking === row.id ? (
+                  <Text color="error" weight="bold">[close?]</Text>
+                ) : (
+                  <Text dimColor>[x]</Text>
+                )}
+              </Button>
+            </Box>
+          </Box>
         ))}
         {frame === null ? (
           <Box marginLeft={2}>

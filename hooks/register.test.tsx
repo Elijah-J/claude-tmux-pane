@@ -70,6 +70,10 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     if (argv[1] === 'list-panes') stdout = list()
     if (argv[1] === 'select-pane') front = argv[3] ?? front
     if (argv[1] === 'wait-for' && argv[2] === '-S') signal()
+    if (argv[1] === 'kill-pane') {
+      const at = panes.findIndex(p => p.pane === argv[3])
+      if (at >= 0) panes.splice(at, 1)
+    }
     if (argv[1] === 'new-window') {
       panes.push({ window: '@7', pane: '%7', command: 'zsh', title: 'host' })
       stdout = '@7\x1f%7\n'
@@ -139,7 +143,8 @@ test('pressing a row brings its pane and window to the front', async ($, on) => 
     tmux.ran.length = 0
     const ui = await $.ui.mount({ ...PANE, surface })
 
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+    // two rows, their two [x], and [new]
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
     await ui.press({ key: '%5' })
 
     expect(tmux.acts()).toEqual([
@@ -346,7 +351,8 @@ test('with no readable registry every unmarked session is Idle and the list stil
   const { tmux } = await start($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  // two rows, their two [x], and [new]
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
   expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
   expect((await rowText(ui, '%5')).endsWith(' -- Idle')).toBe(true)
   await ui.unmount()
@@ -423,4 +429,80 @@ test('a snapshot the previous version stored, rows without a state, is declined 
   expect(await ui.findAll({ type: 'Button', key: '%3' })).toHaveLength(0)
   expect((await ui.find({ type: 'Text', text: /No Claude Code sessions/ }))?.text).toBe('No Claude Code sessions in this tmux session.')
   await ui.unmount()
+})
+
+const KILL = [
+  ['tmux', 'kill-pane', '-t', '%5'],
+  ['tmux', 'wait-for', '-S', 'claude-tmux-pane'],
+]
+const closeText = async (ui: any, pane: string) =>
+  (await ui.find({ type: 'Button', key: `close:${pane}` }))?.text
+
+test('[x] asks first; a second press kills that pane and the row leaves every list', async ($, on) => {
+  const { clock, tmux } = await start($, on)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await closeText(ui, '%5')).toBe('[x]')
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  tmux.ran.length = 0
+
+  await ui.press({ key: 'close:%5' })
+  expect(tmux.acts()).toEqual([])
+  expect(await closeText(ui, '%5')).toBe('[close?]')
+  expect(await closeText(ui, '%3')).toBe('[x]')
+
+  await ui.press({ key: 'close:%5' })
+  expect(tmux.acts()).toEqual(KILL)
+  await clock.advance(0)
+  expect(await ui.find({ type: 'Button', key: '%5' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: '%3' })).toBeDefined()
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('an unanswered [close?] turns back after 3 s, and the next press only asks again', async ($, on) => {
+  const { clock, tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  tmux.ran.length = 0
+
+  await ui.press({ key: 'close:%5' })
+  await clock.advance(2999)
+  expect(await closeText(ui, '%5')).toBe('[close?]')
+  await clock.advance(1)
+  expect(await closeText(ui, '%5')).toBe('[x]')
+
+  await ui.press({ key: 'close:%5' })
+  expect(await closeText(ui, '%5')).toBe('[close?]')
+  expect(tmux.acts()).toEqual([])
+  await ui.unmount()
+  tmux.unload()
+})
+
+test("asking on another row moves the ask; the first row's wait does not cut the second short", async ($, on) => {
+  const { clock, tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  tmux.ran.length = 0
+
+  await ui.press({ key: 'close:%3' })
+  await clock.advance(2000)
+  await ui.press({ key: 'close:%5' })
+  expect(await closeText(ui, '%3')).toBe('[x]')
+  expect(await closeText(ui, '%5')).toBe('[close?]')
+
+  // %3's wait ends here; %5 still asks
+  await clock.advance(1500)
+  expect(await closeText(ui, '%5')).toBe('[close?]')
+  await ui.press({ key: 'close:%3' })
+  expect(tmux.acts()).toEqual([])
+
+  await ui.press({ key: 'close:%3' })
+  expect(tmux.acts()).toEqual([
+    ['tmux', 'kill-pane', '-t', '%3'],
+    ['tmux', 'wait-for', '-S', 'claude-tmux-pane'],
+  ])
+  await ui.unmount()
+  tmux.unload()
 })
