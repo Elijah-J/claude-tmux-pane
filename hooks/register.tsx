@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { TmuxPane, TmuxSnapshot } from '../types'
+import type { SessionState, TmuxPane, TmuxSnapshot } from '../types'
 
 const PANE = 'tmux-sessions'
 
@@ -20,6 +20,9 @@ const FORMAT = [
   '#{window_id}',
   '#{pane_id}',
   '#{pane_current_command}',
+  // A session marks its own pane with this user option: `pending` while it
+  // waits on the person, `active` or `idle` otherwise; unset it reads empty.
+  '#{@claude_state}',
   '#{pane_title}',
 ].join(SEP)
 
@@ -28,8 +31,77 @@ const FORMAT = [
 const snapshot = atom(
   { plugin: 'tmux', key: 'snapshot' } as const,
   { inTmux: true, rows: [] } as TmuxSnapshot,
-  { shape: 'tmux-2' },
+  { shape: 'tmux-3' },
 )
+
+// Claude Code's session registry: one file per running session, naming the
+// tmux pane it runs in ("<session>:<window_id>.<pane_id>") and its status,
+// "busy" while it works.
+const SESSIONS_DIR = '.claude/sessions'
+
+type Registered = { status: string; startedAt: number }
+
+function parseEntry(text: string): (Registered & { paneId: string }) | null {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof value !== 'object' || value === null) return null
+  const { kind, tmux, status, startedAt } = value as Record<string, unknown>
+  // A headless run started from a pane names that pane too.
+  if (kind !== 'interactive' || typeof tmux !== 'string') return null
+  const paneId = tmux.slice(tmux.lastIndexOf('.') + 1)
+  if (!paneId.startsWith('%')) return null
+
+  return {
+    paneId,
+    status: typeof status === 'string' ? status : '',
+    startedAt: typeof startedAt === 'number' ? startedAt : 0,
+  }
+}
+
+// Each pane's session: a crashed session's file can outlive it, so the newest
+// one started in the pane is the one running there. A file that can't be read
+// (its session exited after the listing) is skipped; an unreadable registry is
+// an empty one.
+async function registry($: EngineInterface): Promise<Map<string, Registered>> {
+  const byPane = new Map<string, Registered>()
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) return byPane
+    const dir = `${home}/${SESSIONS_DIR}`
+    for (const file of await $.fs.list(dir)) {
+      if (file.kind !== 'file' || !file.name.endsWith('.json')) continue
+      const entry = parseEntry(await $.fs.read(`${dir}/${file.name}`).catch(() => ''))
+      if (entry === null) continue
+      const last = byPane.get(entry.paneId)
+      if (last === undefined || entry.startedAt > last.startedAt) byPane.set(entry.paneId, entry)
+    }
+  } catch {
+    // no registry: every session reads by its mark alone
+  }
+
+  return byPane
+}
+
+// Needs you while the pane is marked pending; active while it is marked active
+// or its session is busy; idle otherwise.
+function stateOf(mark: string, status: string | undefined): SessionState {
+  if (mark === 'pending') return 'needs-you'
+  if (mark === 'active' || status === 'busy') return 'active'
+
+  return 'idle'
+}
+
+// The suffix after each name: green while it works, bold yellow while it waits
+// on the person, white when idle. It keeps its color on dimmed rows.
+const SUFFIX: Record<SessionState, { text: string; color: 'green' | 'yellow' | 'white'; weight?: 'bold' }> = {
+  active: { text: ' -- Active', color: 'green' },
+  'needs-you': { text: ' -- Needs you', color: 'yellow', weight: 'bold' },
+  idle: { text: ' -- Idle', color: 'white' },
+}
 
 // The spinner frame of the [new] row while it starts a session; null when idle.
 const launching = atom(
@@ -62,7 +134,7 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
   }
   if (result.exitCode !== 0) return { inTmux: false, rows: [] }
 
-  const rows = result.stdout
+  const panes = result.stdout
     .split('\n')
     .filter(line => line.length > 0)
     .map(line => {
@@ -72,6 +144,7 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         windowId = '',
         id = '',
         command = '',
+        mark = '',
         ...rest
       ] = line.split(SEP)
       const name = (rest.join(SEP) || id).trim()
@@ -80,11 +153,17 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         windowId,
         name,
         command,
+        mark: mark.trim(),
         // The user faces the active pane of the active window.
         isActive: windowActive === '1' && paneActive === '1',
       }
     })
-    .filter(row => isClaude(row.command))
+    .filter(pane => isClaude(pane.command))
+  const sessions = panes.length === 0 ? new Map<string, Registered>() : await registry($)
+  const rows: TmuxPane[] = panes.map(({ mark, ...pane }) => ({
+    ...pane,
+    state: stateOf(mark, sessions.get(pane.id)?.status),
+  }))
 
   return { inTmux: true, rows }
 }
@@ -232,6 +311,13 @@ export const register: Register = (on, options) => {
             >
               {row.isActive ? '▶ ' : '  '}
               {row.name}
+            </Text>
+            <Text
+              color={SUFFIX[row.state].color}
+              weight={SUFFIX[row.state].weight}
+              dimColor={false}
+            >
+              {SUFFIX[row.state].text}
             </Text>
           </Button>
         ))}

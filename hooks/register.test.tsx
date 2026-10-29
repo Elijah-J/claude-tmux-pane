@@ -23,8 +23,9 @@ const COMMAND = {
   presentation: { isFullscreen: true, columns: 160 },
 } as const
 
-// One pane per window: two Claude sessions and a shell.
-const PANES = [
+// One pane per window: two Claude sessions and a shell. `mark` is the pane's
+// @claude_state user option, empty when unset.
+const PANES: { window: string; pane: string; command: string; title: string; mark?: string }[] = [
   { window: '@3', pane: '%3', command: '2.1.312', title: 'this session' },
   { window: '@5', pane: '%5', command: '2.1.312', title: 'other session' },
   { window: '@6', pane: '%6', command: 'zsh', title: 'a shell' },
@@ -34,9 +35,9 @@ const PANES = [
 // brings one forward, wait-for blocks until wait-for -S wakes every waiter, and
 // new-window opens a shell whose typed command reads as Claude Code, ready for
 // input, from the `readyAt`th display on.
-function fakeTmux(on: On, readyAt = 1) {
+function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
   const ran: string[][] = []
-  const panes = PANES.map(p => ({ ...p }))
+  const panes = [...PANES, ...extra].map(p => ({ ...p }))
   let front = '%3'
   let displays = 0
   let isUnloaded = false
@@ -49,7 +50,7 @@ function fakeTmux(on: On, readyAt = 1) {
   const list = () =>
     panes
       .map(p =>
-        [p.pane === front ? '1' : '0', '1', p.window, p.pane, p.command, p.title]
+        [p.pane === front ? '1' : '0', '1', p.window, p.pane, p.command, p.mark ?? '', p.title]
           .join('\x1f'),
       )
       .join('\n')
@@ -98,6 +99,7 @@ function fakeTmux(on: On, readyAt = 1) {
 
   return {
     ran,
+    panes,
     // What the mod ran but the probes and the waits on the channel.
     acts: () =>
       ran.filter(
@@ -118,12 +120,12 @@ function fakeTmux(on: On, readyAt = 1) {
   }
 }
 
-async function start($: Parameters<TestBody>[0], on: On, readyAt = 1) {
+async function start($: Parameters<TestBody>[0], on: On, readyAt = 1, extra: typeof PANES = []) {
   on('command.register', () => ({ value: { command: 'tmux' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   const clock = mock.clock(on)
-  const tmux = fakeTmux(on, readyAt)
+  const tmux = fakeTmux(on, readyAt, extra)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.command.run(COMMAND)
 
@@ -229,4 +231,178 @@ test('[new] spins until the new session waits for input, then switches', async (
   ])
   await ui.unmount()
   tmux.unload()
+})
+
+const HOME = '/Users/me'
+const SESSIONS = `${HOME}/.claude/sessions`
+
+// Claude Code's session registry as measured on 2026-10-29: one file per
+// running session, naming its tmux pane ("<session>:<window_id>.<pane_id>"),
+// its kind and its status ("busy" while it works).
+const entry = (pid: number, tmux: string, status: string, startedAt: number, kind = 'interactive') =>
+  JSON.stringify({ pid, sessionId: `s-${pid}`, kind, entrypoint: 'cli', status, startedAt, statusUpdatedAt: startedAt, tmux })
+
+// The registry beneath the mod, listed in the order of `files`.
+function fakeRegistry(on: On, files: Record<string, string>) {
+  mock.env(on, { HOME })
+  on('fs.list', (_, e) => ({
+    value: Object.keys(files)
+      .filter(path => path.startsWith(`${e.path}/`))
+      .map(path => ({ name: path.slice(e.path.length + 1), kind: 'file' as const, size: 0, mtimeMs: 0, isLink: false })),
+  }))
+  on('fs.read', (_, e) => {
+    const text = files[e.path]
+    if (text === undefined) throw new Error(`ENOENT: no such file, open '${e.path}'`)
+
+    return { value: text }
+  })
+
+  return files
+}
+
+const THIRD = [{ window: '@8', pane: '%8', command: '2.1.312', title: 'third session' }]
+const rowText = async (ui: any, pane: string) => (await ui.find({ type: 'Button', key: pane }))?.text ?? ''
+const suffix = async (ui: any, text: string) =>
+  (await ui.find({ type: 'Text', text: new RegExp(`^${text}$`) }))?.props
+
+test('each Claude session ends with its state: Active green, Needs you bold yellow, Idle white', async ($, on) => {
+  fakeRegistry(on, {
+    // a session that exited between the listing and the read: skipped, the rest still count
+    [`${SESSIONS}/099.json`]: undefined as unknown as string,
+    [`${SESSIONS}/300.json`]: entry(300, '2:@3.%3', 'busy', 1),
+    [`${SESSIONS}/500.json`]: entry(500, '2:@5.%5', 'idle', 1),
+    [`${SESSIONS}/800.json`]: entry(800, '2:@8.%8', 'idle', 1),
+  })
+  const { tmux } = await start($, on, 1, THIRD)
+  const other = tmux.panes.find(p => p.pane === '%5')
+  if (other) other.mark = 'pending'
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await rowText(ui, '%3')).endsWith(' -- Active')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Needs you')).toBe(true)
+  expect((await rowText(ui, '%8')).endsWith(' -- Idle')).toBe(true)
+  expect(await suffix(ui, ' -- Active')).toMatchObject({ color: 'green', dimColor: false })
+  expect(await suffix(ui, ' -- Needs you')).toMatchObject({ color: 'yellow', weight: 'bold', dimColor: false })
+  expect(await suffix(ui, ' -- Idle')).toMatchObject({ color: 'white', dimColor: false })
+  // the fields this fake answers, in its order: the mark sits before the title
+  const listing = tmux.ran.find(argv => argv[1] === 'list-panes')
+  expect(listing?.slice(0, 4)).toEqual(['tmux', 'list-panes', '-s', '-F'])
+  expect(listing?.[4]?.split('\x1f')).toEqual([
+    '#{window_active}', '#{pane_active}', '#{window_id}', '#{pane_id}',
+    '#{pane_current_command}', '#{@claude_state}', '#{pane_title}',
+  ])
+  // the name keeps its own highlight
+  expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ this session')
+  await ui.unmount()
+  tmux.unload()
+})
+
+test("a pane's newest interactive session gives its state; a stale or headless entry, or another pane's, does not", async ($, on) => {
+  fakeRegistry(on, {
+    // a crash left 100 behind; 101 runs there now; 103 is older than 101
+    [`${SESSIONS}/100.json`]: entry(100, '2:@5.%5', 'busy', 1),
+    [`${SESSIONS}/101.json`]: entry(101, '2:@5.%5', 'idle', 3),
+    [`${SESSIONS}/103.json`]: entry(103, '2:@5.%5', 'busy', 2),
+    // a headless run started from that pane, newer still
+    [`${SESSIONS}/104.json`]: entry(104, '2:@5.%5', 'busy', 4, 'sdk'),
+    // a busy session in a pane this list does not show
+    [`${SESSIONS}/900.json`]: entry(900, '0:@9.%9', 'busy', 5),
+  })
+  const { tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await rowText(ui, '%5')).endsWith(' -- Idle')).toBe(true)
+  expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('a pane marked active reads Active though its session is idle; a pending mark wins over busy', async ($, on) => {
+  fakeRegistry(on, {
+    [`${SESSIONS}/300.json`]: entry(300, '2:@3.%3', 'idle', 1),
+    [`${SESSIONS}/500.json`]: entry(500, '2:@5.%5', 'busy', 1),
+  })
+  const { tmux } = await start($, on)
+  for (const [pane, mark] of [['%3', 'active'], ['%5', 'pending']] as const) {
+    const p = tmux.panes.find(one => one.pane === pane)
+    if (p) p.mark = mark
+  }
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await rowText(ui, '%3')).endsWith(' -- Active')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Needs you')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('with no readable registry every unmarked session is Idle and the list still draws', async ($, on) => {
+  mock.env(on, { HOME })
+  on('fs.list', (_, e) => {
+    throw new Error(`ENOENT: no such file or directory, scandir '${e.path}'`)
+  })
+  const { tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Idle')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('the state follows the next poll: a session that goes idle, a pane that turns pending', async ($, on) => {
+  const files = fakeRegistry(on, {
+    [`${SESSIONS}/300.json`]: entry(300, '2:@3.%3', 'busy', 1),
+    [`${SESSIONS}/500.json`]: entry(500, '2:@5.%5', 'idle', 1),
+  })
+  const { clock, tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await rowText(ui, '%3')).endsWith(' -- Active')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Idle')).toBe(true)
+
+  files[`${SESSIONS}/300.json`] = entry(300, '2:@3.%3', 'idle', 1)
+  const other = tmux.panes.find(p => p.pane === '%5')
+  if (other) other.mark = 'pending'
+  await clock.advance(2000)
+
+  expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Needs you')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('an idle or unknown mark defers to the registry; a shell status reads Idle', async ($, on) => {
+  fakeRegistry(on, {
+    [`${SESSIONS}/300.json`]: entry(300, '2:@3.%3', 'busy', 1),
+    [`${SESSIONS}/500.json`]: entry(500, '2:@5.%5', 'busy', 1),
+    [`${SESSIONS}/800.json`]: entry(800, '2:@8.%8', 'shell', 1),
+  })
+  const { tmux } = await start($, on, 1, THIRD)
+  for (const [pane, mark] of [['%3', 'idle'], ['%5', 'later']] as const) {
+    const p = tmux.panes.find(one => one.pane === pane)
+    if (p) p.mark = mark
+  }
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await rowText(ui, '%3')).endsWith(' -- Active')).toBe(true)
+  expect((await rowText(ui, '%5')).endsWith(' -- Active')).toBe(true)
+  expect((await rowText(ui, '%8')).endsWith(' -- Idle')).toBe(true)
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('a snapshot the previous version stored, rows without a state, is declined after the reload', async ($, on) => {
+  on('state.get', ($, e, next) =>
+    e.plugin === 'tmux' && e.key === 'snapshot'
+      ? { value: { value: { shape: 'tmux-2', value: { inTmux: true, rows: [{ id: '%3', windowId: '@3', name: 'old row', command: '2.1.312', isActive: true }] } }, version: 1 } }
+      : next(e),
+  )
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await ui.findAll({ type: 'Button', key: '%3' })).toHaveLength(0)
+  expect((await ui.find({ type: 'Text', text: /No Claude Code sessions/ }))?.text).toBe('No Claude Code sessions in this tmux session.')
+  await ui.unmount()
 })

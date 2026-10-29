@@ -9,7 +9,12 @@ export type TmuxPane = {
   command: string
   /** True for the pane the user is looking at now: active pane of the active window. */
   isActive: boolean
+  /** The session's state, drawn after its name: from the pane's @claude_state mark, else its registry status. */
+  state: SessionState
 }
+
+/** `needs-you` while the pane is marked pending; `active` while marked active or its session is busy; else `idle`. */
+export type SessionState = 'active' | 'needs-you' | 'idle'
 
 export type TmuxSnapshot = {
   /** False when this session is not inside a tmux session (nothing to list). */

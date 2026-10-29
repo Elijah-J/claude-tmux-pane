@@ -8,12 +8,29 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 
 - One row per tmux pane that is running Claude Code, named by that session's title.
 - The session **facing you** — the active pane of the active window — is bold, colored, and marked with `▶`. The rest are dimmed.
+- Each row ends with the session's state: ` -- Active` in green while it works, ` -- Needs you` in bold yellow while it waits on you, ` -- Idle` in white otherwise. The state keeps its color on dimmed rows.
 - Panes that aren't running Claude Code (plain shells, other programs) are left out.
 - Click a row (or focus it and press Enter) to bring that session to the front: its tmux window becomes the current one and its pane the active pane.
 - The list refreshes every couple of seconds, and in every session at once when you click a row, so the highlight is already right in the session you land on.
 - `[new]` at the bottom opens a new tmux window, starts Claude Code in it, spins while it loads, and switches to it once it is ready for input.
 
 A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`); an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
+
+## Session state
+
+The state comes from two places:
+
+- **Claude Code's session registry,** `~/.claude/sessions/<pid>.json`. Each interactive session's file names its tmux pane (`"tmux": "<session>:<window_id>.<pane_id>"`) and its `status`. A `busy` status reads Active, and any other status reads Idle. Where a crash left a second file for the same pane, the newest `startedAt` counts. A file that can't be read (a session exiting mid-poll) is skipped, and an unreadable registry leaves every unmarked row Idle.
+- **The pane's `@claude_state` user option,** which a session sets on its own pane. `pending` reads Needs you, and it wins over a busy status. `active` reads Active. Anything else, or no option at all, defers to the registry. A session marks its pane with:
+
+  ```
+  tmux set-option -p -t "$TMUX_PANE" @claude_state pending   # or active, idle
+  tmux set-option -p -u -t "$TMUX_PANE" @claude_state        # clear it
+  ```
+
+  tmux passes each pane's ID to its processes as `TMUX_PANE`. This plugin only reads the option; your own setup sets it. Mark the pane `pending` just before handing the person a question. Your session's hooks can keep it current: `UserPromptSubmit` setting `active`, and `Stop` setting `idle` unless the turn just set `pending`. A pane left `active` reads Active even while its session is idle, which is how background work that outlives a turn shows.
+
+  Set the option on the pane (`-p`). tmux reads an unset pane option from its window and then from the global options, so a window or global `@claude_state` marks every pane under it.
 
 ## Install
 
