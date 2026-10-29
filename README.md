@@ -38,7 +38,7 @@ The pane opens automatically when a session starts. Run `/tmux` any time to reop
 `[new]` types `claude` into the new window's shell, in the working directory of the session you clicked it from. To start sessions another way (with flags, say), set **New session command** in `/config`, or from a shell:
 
 ```
-echo '{"new_session_command": "claude --model opus"}' | claude plugin configure tmux --values-stdin
+echo '{"new_session_command": "claude --model opus"}' | claude plugin configure tmux@claude-tmux-pane --values-stdin
 ```
 
 ## Requirements
