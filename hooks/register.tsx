@@ -172,12 +172,13 @@ function nameOf(agent: Agent, title: string): string {
 
 const AGENT_NAME: Record<Agent, string> = { claude: 'Claude Code', codex: 'Codex' }
 
-// When the session [new] started waits for input: Claude Code titles its pane
-// with ✳ then; Codex writes its own title once its prompt is up (measured
-// 2026-10-30: about 1.9 s after it starts), so any title but the window's first.
-const isReady: Record<Agent, (command: string, title: string, opened: string) => boolean> = {
+// When the session [new] started is ready to show: Claude Code titles its pane
+// with ✳ once it waits for input; Codex draws on the alternate screen at once
+// but writes its own title only when its session is up, 4 to 20 s in (measured
+// 2026-10-30), so its screen is the sign.
+const isReady: Record<Agent, (command: string, title: string, isAlternate: boolean) => boolean> = {
   claude: (command, title) => isClaude(command) && title.startsWith('✳'),
-  codex: (command, title, opened) => agentOf(command) === 'codex' && title !== opened,
+  codex: (command, _title, isAlternate) => agentOf(command) === 'codex' && isAlternate,
 }
 
 async function probe($: EngineInterface): Promise<TmuxSnapshot> {
@@ -334,11 +335,11 @@ async function startSession($: EngineInterface, agent: Agent, command: string): 
       '-d',
       '-P',
       '-F',
-      `#{window_id}${SEP}#{pane_id}${SEP}#{pane_title}`,
+      `#{window_id}${SEP}#{pane_id}`,
       ...(cwd ? ['-c', cwd] : []),
     ])
     if (created.exitCode !== 0) return
-    const [windowId = '', id = '', opened = ''] = created.stdout.replace(/\n$/, '').split(SEP)
+    const [windowId = '', id = ''] = created.stdout.replace(/\n$/, '').split(SEP)
     // Typed into that shell, the command runs as if typed by hand.
     await $.process.run(['tmux', 'send-keys', '-t', id, '-l', command])
     await $.process.run(['tmux', 'send-keys', '-t', id, 'Enter'])
@@ -350,12 +351,12 @@ async function startSession($: EngineInterface, agent: Agent, command: string): 
         '-p',
         '-t',
         id,
-        `#{pane_current_command}${SEP}#{pane_title}`,
+        `#{pane_current_command}${SEP}#{pane_title}${SEP}#{alternate_on}`,
       ])
       // The window was closed while starting.
       if (shown.exitCode !== 0) return
-      const [current = '', title = ''] = shown.stdout.replace(/\n$/, '').split(SEP)
-      if (isReady[agent](current, title, opened)) break
+      const [current = '', title = '', alternate = ''] = shown.stdout.replace(/\n$/, '').split(SEP)
+      if (isReady[agent](current, title, alternate === '1')) break
       await $.clock.sleep(TICK_MS)
       await spin(tick)
     }
@@ -468,33 +469,34 @@ export const register: Register = (on, options) => {
           <Button
             key={`close:${row.id}`}
             plain
+            hover={{ inverse: false }}
             onPress={() => void pressClose($, row)}
           >
             {asking === row.id ? (
               <Text color="error" weight="bold">[close?]</Text>
             ) : (
-              <Text dimColor>[x]</Text>
+              <Text dimColor hover={{ dimColor: false }}>[x]</Text>
             )}
           </Button>
         </Box>
       </Box>
     )
 
-    // Each agent's [new] ends its list. It switches windows too, so it stays
-    // dim and uninverted under the pointer, as the rows do; its keyed Box
-    // scopes the hover.
+    // Each agent's [new] ends its list. It switches windows too, so it never
+    // inverts under the pointer, as the rows do; it brightens from dim, as a
+    // name does. Its keyed Box scopes the hover.
     const drawNew = (agent: Agent) => {
       const frame = frames[agent]
       return frame === null ? (
         <Box key={`new-row:${agent}`} marginLeft={2}>
           <Button
             key={agent === 'claude' ? 'new' : 'new-codex'}
-            label="[new]"
             plain
-            dimColor
-            hover={{ inverse: false, dimColor: true }}
+            hover={{ inverse: false }}
             onPress={() => void startSession($, agent, newCommand[agent])}
-          />
+          >
+            <Text dimColor hover={{ dimColor: false }}>[new]</Text>
+          </Button>
         </Box>
       ) : (
         <Text dimColor>

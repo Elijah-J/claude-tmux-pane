@@ -35,7 +35,8 @@ const PANES: { window: string; pane: string; command: string; title: string; mar
 // brings one forward, wait-for blocks until wait-for -S wakes every waiter, and
 // new-window opens a shell whose typed command reads as Claude Code, ready for
 // input, from the `readyAt`th display on; typed `codex`, it reads as Codex at
-// once and writes its own title from the `readyAt`th display on.
+// once and draws its alternate screen from the `readyAt`th display on (its own
+// title comes later still, here never).
 function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
   const ran: string[][] = []
   const panes = [...PANES, ...extra].map(p => ({ ...p }))
@@ -60,11 +61,13 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     const p = panes.find(one => one.pane === pane)
     if (!p) return ''
     displays += 1
+    let alternate = '0'
     if (typed.startsWith('codex')) {
-      Object.assign(p, { command: 'codex', title: displays >= readyAt ? 'CorpusForge' : p.title })
+      p.command = 'codex'
+      if (displays >= readyAt) alternate = '1'
     } else if (displays >= readyAt) Object.assign(p, { command: '2.1.312', title: '✳ Claude Code' })
 
-    return `${p.command}\x1f${p.title}\n`
+    return `${p.command}\x1f${p.title}\x1f${alternate}\n`
   }
 
   on('process.run', (_, e) => {
@@ -95,7 +98,7 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     }
     if (argv[1] === 'new-window') {
       panes.push({ window: '@7', pane: '%7', command: 'zsh', title: 'host' })
-      stdout = '@7\x1f%7\x1fhost\n'
+      stdout = '@7\x1f%7\n'
     }
     if (argv[1] === 'display') stdout = display(argv[4] ?? '')
 
@@ -204,7 +207,7 @@ function hoverOf(node: any, key: string): unknown {
   return undefined
 }
 
-test('rows and [new] do not invert under the pointer, so no bar stays where a click left it', async ($, on) => {
+test('rows, [x] and [new] do not invert under the pointer, so no bar stays where a click left it', async ($, on) => {
   const { tmux } = await start($, on)
 
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -212,18 +215,20 @@ test('rows and [new] do not invert under the pointer, so no bar stays where a cl
     const tree = await ui.drawn()
     expect(hoverOf(tree, '%3')).toEqual({ inverse: false })
     expect(hoverOf(tree, '%5')).toEqual({ inverse: false })
-    expect(hoverOf(tree, 'new')).toEqual({ inverse: false, dimColor: true })
-    expect(hoverOf(tree, 'new-codex')).toEqual({ inverse: false, dimColor: true })
+    expect(hoverOf(tree, 'new')).toEqual({ inverse: false })
+    expect(hoverOf(tree, 'new-codex')).toEqual({ inverse: false })
+    expect(hoverOf(tree, 'close:%3')).toEqual({ inverse: false })
+    expect(hoverOf(tree, 'close:%5')).toEqual({ inverse: false })
     await ui.unmount()
   }
   tmux.unload()
 })
 
 const NEW_WINDOW = [
-  'tmux', 'new-window', '-d', '-P', '-F', '#{window_id}\x1f#{pane_id}\x1f#{pane_title}', '-c', '/',
+  'tmux', 'new-window', '-d', '-P', '-F', '#{window_id}\x1f#{pane_id}', '-c', '/',
 ]
 const DISPLAY = [
-  'tmux', 'display', '-p', '-t', '%7', '#{pane_current_command}\x1f#{pane_title}',
+  'tmux', 'display', '-p', '-t', '%7', '#{pane_current_command}\x1f#{pane_title}\x1f#{alternate_on}',
 ]
 const SWITCH = [
   ['tmux', 'select-pane', '-t', '%7'],
@@ -638,7 +643,7 @@ test("a Codex row opens with Claude Code's ✳ bullet, in place of Codex's spinn
 })
 
 test(
-  "Codex's [new] starts the configured command and switches once Codex writes its title",
+  "Codex's [new] starts the configured command and switches once Codex draws its screen",
   { options: { new_codex_command: 'codex --yolo' } },
   async ($, on) => {
     const { clock, tmux } = await start($, on, 3)
@@ -648,7 +653,7 @@ test(
 
     await ui.press({ key: 'new-codex' })
 
-    // codex runs at once, but its title is still the window's first
+    // codex runs at once, but has not drawn its screen
     expect(await spinner()).toBe('  ◐ starting Codex…')
     expect(await ui.find({ key: 'new-codex' })).toBeUndefined()
     // the Claude Code [new] stays pressable meanwhile
@@ -779,6 +784,18 @@ test('the row a session was left from stays dim under the pointer until the next
   await ui.press({ key: 'close:%10' })
   tree = await ui.drawn()
   expect(nameHoverOf(tree, '%5')).toEqual({ dimColor: false })
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('[x] and each [new] brighten from dim under the pointer, on the facing row too', async ($, on) => {
+  const { tmux } = await start($, on, 1, CODEX)
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const tree = await ui.drawn()
+  for (const key of ['close:%3', 'close:%5', 'close:%10', 'new', 'new-codex']) {
+    expect(nameHoverOf(tree, key)).toEqual({ dimColor: false })
+  }
   await ui.unmount()
   tmux.unload()
 })
