@@ -733,3 +733,52 @@ test('without a list command a Codex row only switches', async ($, on) => {
   await ui.unmount()
   tmux.unload()
 })
+
+// The hover of the name Text in the row Button keyed `key`.
+function nameHoverOf(node: any, key: string): unknown {
+  if (typeof node !== 'object' || node === null) return undefined
+  if (node.type === 'Button' && node.props?.key === key) {
+    const name = (node.children ?? []).find((child: any) => child?.type === 'Text')
+    return name ? (name.hover ?? null) : undefined
+  }
+  for (const child of node.children ?? []) {
+    const hover = nameHoverOf(child, key)
+    if (hover !== undefined) return hover
+  }
+
+  return undefined
+}
+
+test("another session's name brightens on its row's hover; the facing one's does not", async ($, on) => {
+  const { tmux } = await start($, on, 1, CODEX)
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const tree = await ui.drawn()
+  // %3 faces the user
+  expect(nameHoverOf(tree, '%3')).toBeNull()
+  expect(nameHoverOf(tree, '%5')).toEqual({ dimColor: false })
+  expect(nameHoverOf(tree, '%10')).toEqual({ dimColor: false })
+  // the rows themselves still never invert
+  expect(hoverOf(tree, '%5')).toEqual({ inverse: false })
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('the row a session was left from stays dim under the pointer until the next press there', async ($, on) => {
+  const { tmux } = await start($, on, 1, CODEX)
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: '%5' })
+  // %5 came forward; back here, the pointer this session kept rests on its row
+  tmux.clickElsewhere('%3')
+  await $.command.run(COMMAND)
+  let tree = await ui.drawn()
+  expect(nameHoverOf(tree, '%5')).toBeNull()
+  expect(nameHoverOf(tree, '%10')).toEqual({ dimColor: false })
+  // a press here, the first [x] ask, lifts it
+  await ui.press({ key: 'close:%10' })
+  tree = await ui.drawn()
+  expect(nameHoverOf(tree, '%5')).toEqual({ dimColor: false })
+  await ui.unmount()
+  tmux.unload()
+})

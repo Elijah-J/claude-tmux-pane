@@ -1,6 +1,6 @@
 {
   "name": "tmux",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "A pane listing the interactive Claude Code and Codex sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, its [x] twice to close it, or a [new] to start another Claude Code or Codex session.",
   "types": "./types/index.d.ts",
   "userConfig": {

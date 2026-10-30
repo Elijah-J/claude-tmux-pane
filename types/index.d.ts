@@ -39,6 +39,8 @@ declare module 'claude-code' {
       launching: Shaped<Launching>
       /** The pane whose [x] was pressed once and asks [close?]; null when none. */
       closing: string | null
+      /** The row whose press last left this session, kept dim under the pointer until the next press here; null when none. */
+      leftFrom: string | null
     }
   }
 }

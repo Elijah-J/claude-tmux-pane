@@ -118,6 +118,16 @@ const closing = atom(
   null as string | null,
 )
 
+// The row this session was left from: a press on it brought another session
+// forward, and the pointer this session keeps rests there until the person
+// moves it here again, which no hook sees. The row does not brighten on hover
+// until the next press in this pane, so coming back finds no lit name where
+// the pointer only was (measured 2026-10-30); null when none.
+const leftFrom = atom(
+  { plugin: 'tmux', key: 'leftFrom' } as const,
+  null as string | null,
+)
+
 // How long a pressed [x] waits for the second press before it turns back.
 const CONFIRM_MS = 3000
 // Each first press counts; a wait ends its ask only if no later press re-asked.
@@ -269,6 +279,12 @@ async function bringToFront(
   await $.process.run(['tmux', 'wait-for', '-S', CHANNEL])
 }
 
+// A press on a row leaves this session from it, then brings that row forward.
+async function pressRow($: EngineInterface, row: TmuxPane): Promise<void> {
+  await update($, leftFrom, () => row.id)
+  await bringToFront($, row)
+}
+
 // Close a row's session by killing its pane, which ends the Claude Code running
 // there, and its window too where it was the window's only pane. Like a select,
 // a kill of a pane closed since the last probe fails rather than hitting another.
@@ -282,6 +298,7 @@ async function closeSession($: EngineInterface, row: Pick<TmuxPane, 'id'>): Prom
 // The first press on a row's [x] asks [close?]; a second press within
 // CONFIRM_MS closes the session. Asking on another row moves the ask there.
 async function pressClose($: EngineInterface, row: Pick<TmuxPane, 'id'>): Promise<void> {
+  await update($, leftFrom, () => null)
   let isConfirmed = false
   await update($, closing, id => {
     isConfirmed = id === row.id
@@ -305,6 +322,7 @@ async function pressClose($: EngineInterface, row: Pick<TmuxPane, 'id'>): Promis
 // Open a new window in this tmux session, start Claude Code or Codex in it, and
 // bring it to the front once the new session waits for input.
 async function startSession($: EngineInterface, agent: Agent, command: string): Promise<void> {
+  await update($, leftFrom, () => null)
   const spin = (frame: number | null) => update($, launching, l => ({ ...l, [agent]: frame }))
   await spin(0)
   try {
@@ -380,6 +398,7 @@ export const register: Register = (on, options) => {
     // A start a reload cut short leaves its frame behind, and an ask its [close?].
     await update($, launching, () => ({ claude: null, codex: null }))
     await update($, closing, () => null)
+    await update($, leftFrom, () => null)
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
     void watchClicks($)
@@ -412,6 +431,7 @@ export const register: Register = (on, options) => {
     const codexRows = snap.rows.filter(row => row.agent === 'codex')
     const frames = await read($, launching)
     const asking = await read($, closing)
+    const left = await read($, leftFrom)
 
     const drawRow = (row: TmuxPane) => (
       <Box key={`row:${row.id}`}>
@@ -419,17 +439,19 @@ export const register: Register = (on, options) => {
             session left behind keeps the pointer where the click was, and a
             Button inverts under the pointer, so on coming back the row
             clicked there would be a bar: the row never inverts (measured
-            2026-10-30), and only the facing row's name is colored. */}
+            2026-10-30), and only the facing row's name is colored. Another
+            session's name brightens from dim while the pointer is on its row. */}
         <Button
           key={row.id}
           plain
           hover={{ inverse: false }}
-          onPress={() => void bringToFront($, row)}
+          onPress={() => void pressRow($, row)}
         >
           <Text
             color={row.isActive ? HIGHLIGHT[row.agent] : undefined}
             weight={row.isActive ? 'bold' : undefined}
             dimColor={!row.isActive}
+            hover={row.isActive || row.id === left ? undefined : { dimColor: false }}
           >
             {row.isActive ? '▶ ' : '  '}
             {row.name}
