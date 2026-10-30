@@ -5,13 +5,18 @@ export type TmuxPane = {
   windowId: string
   /** Display name: the pane title (its ✳ state glyph and session title), else the pane id. */
   name: string
-  /** tmux's current foreground command for the pane; a Claude pane reports its version. */
+  /** tmux's current foreground command for the pane; a Claude pane reports its version, a Codex pane `codex`. */
   command: string
+  /** Which agent runs in the pane. */
+  agent: Agent
   /** True for the pane the user is looking at now: active pane of the active window. */
   isActive: boolean
-  /** The session's state, drawn after its name: from the pane's @claude_state mark, else its registry status. */
+  /** The session's state, drawn after its name: from the pane's @claude_state mark, else (Claude Code only) its registry status. */
   state: SessionState
 }
+
+/** The agent a listed pane runs: Claude Code or Codex. */
+export type Agent = 'claude' | 'codex'
 
 /** `needs-you` while the pane is marked pending; `active` while marked active or its session is busy; else `idle`. */
 export type SessionState = 'active' | 'needs-you' | 'idle'
@@ -19,7 +24,7 @@ export type SessionState = 'active' | 'needs-you' | 'idle'
 export type TmuxSnapshot = {
   /** False when this session is not inside a tmux session (nothing to list). */
   inTmux: boolean
-  /** The interactive Claude Code sessions, one per tmux pane running Claude. */
+  /** The interactive Claude Code and Codex sessions, one per tmux pane running either. */
   rows: TmuxPane[]
 }
 

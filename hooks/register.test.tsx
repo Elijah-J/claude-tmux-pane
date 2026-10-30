@@ -418,10 +418,10 @@ test('an idle or unknown mark defers to the registry; a shell status reads Idle'
   tmux.unload()
 })
 
-test('a snapshot the previous version stored, rows without a state, is declined after the reload', async ($, on) => {
+test('a snapshot the previous version stored, rows without an agent, is declined after the reload', async ($, on) => {
   on('state.get', ($, e, next) =>
     e.plugin === 'tmux' && e.key === 'snapshot'
-      ? { value: { value: { shape: 'tmux-2', value: { inTmux: true, rows: [{ id: '%3', windowId: '@3', name: 'old row', command: '2.1.312', isActive: true }] } }, version: 1 } }
+      ? { value: { value: { shape: 'tmux-3', value: { inTmux: true, rows: [{ id: '%3', windowId: '@3', name: 'old row', command: '2.1.312', isActive: true, state: 'idle' }] } }, version: 1 } }
       : next(e),
   )
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -503,6 +503,72 @@ test("asking on another row moves the ask; the first row's wait does not cut the
     ['tmux', 'kill-pane', '-t', '%3'],
     ['tmux', 'wait-for', '-S', 'claude-tmux-pane'],
   ])
+  await ui.unmount()
+  tmux.unload()
+})
+
+// Two Codex panes, as tmux reports them: `codex` as the current command, and
+// the title Codex writes for itself.
+const CODEX = [
+  { window: '@10', pane: '%10', command: 'codex', title: 'codex one', mark: 'active' },
+  { window: '@11', pane: '%11', command: 'codex', title: 'codex two' },
+]
+
+test('Codex sessions list under their own header, the facing one in Codex blue', async ($, on) => {
+  fakeRegistry(on, {
+    // a busy Claude Code entry a crash left in a pane Codex runs in now
+    [`${SESSIONS}/110.json`]: entry(110, '2:@11.%11', 'busy', 1),
+  })
+  const { clock, tmux } = await start($, on, 1, CODEX)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // four rows, their four [x], and [new]; the shell stays out
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(9)
+    expect(await ui.find({ type: 'Text', text: /^Codex$/ })).toBeDefined()
+    expect((await rowText(ui, '%10')).endsWith(' -- Active')).toBe(true)
+    expect((await rowText(ui, '%11')).endsWith(' -- Idle')).toBe(true)
+    expect(await closeText(ui, '%10')).toBe('[x]')
+    // a Claude Code row facing the user keeps Claude's color
+    expect((await ui.find({ type: 'Text', text: /▶/ }))?.props).toMatchObject({ color: 'claude', weight: 'bold' })
+    await ui.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  tmux.ran.length = 0
+  await ui.press({ key: '%10' })
+  expect(tmux.acts()).toEqual([
+    ['tmux', 'select-pane', '-t', '%10'],
+    ['tmux', 'select-window', '-t', '@10'],
+    ['tmux', 'wait-for', '-S', 'claude-tmux-pane'],
+  ])
+  await clock.advance(0)
+  const front = await ui.find({ type: 'Text', text: /▶/ })
+  expect(front?.text).toBe('▶ codex one')
+  expect(front?.props).toMatchObject({ color: '#63A8F8', weight: 'bold' })
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('with only Codex sessions the Claude Code list says it is empty and [new] stays', async ($, on) => {
+  const { tmux } = await start($, on, 1, CODEX)
+  tmux.panes.splice(0, tmux.panes.length, ...tmux.panes.filter(p => p.command === 'codex'))
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await ui.find({ type: 'Text', text: /No Claude Code sessions/ }))?.text).toBe('No Claude Code sessions in this tmux session.')
+  expect(await ui.find({ key: 'new' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: '%10' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: '%11' })).toBeDefined()
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('without Codex sessions there is no Codex header', async ($, on) => {
+  const { tmux } = await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await ui.find({ type: 'Text', text: /^Codex$/ })).toBeUndefined()
   await ui.unmount()
   tmux.unload()
 })

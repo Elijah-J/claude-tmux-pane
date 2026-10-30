@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { SessionState, TmuxPane, TmuxSnapshot } from '../types'
+import type { Agent, SessionState, TmuxPane, TmuxSnapshot } from '../types'
 
 const PANE = 'tmux-sessions'
 
@@ -31,7 +31,7 @@ const FORMAT = [
 const snapshot = atom(
   { plugin: 'tmux', key: 'snapshot' } as const,
   { inTmux: true, rows: [] } as TmuxSnapshot,
-  { shape: 'tmux-3' },
+  { shape: 'tmux-4' },
 )
 
 // Claude Code's session registry: one file per running session, naming the
@@ -135,6 +135,18 @@ let cwd: string | undefined
 // non-Claude windows and panes.
 const isClaude = (command: string) => /^\d+\.\d+\.\d+/.test(command.trim())
 
+// A tmux pane running the Codex CLI reports `codex` (measured 2026-10-30).
+function agentOf(command: string): Agent | null {
+  if (isClaude(command)) return 'claude'
+  if (command.trim() === 'codex') return 'codex'
+
+  return null
+}
+
+// The facing row's name: Claude Code's own color, or Codex's accent, ChatGPT
+// Blue 200 (`UI_ACCENT` in codex-rs/tui/src/style.rs, Codex 0.165.0).
+const HIGHLIGHT: Record<Agent, string> = { claude: 'claude', codex: '#63A8F8' }
+
 async function probe($: EngineInterface): Promise<TmuxSnapshot> {
   let result
   try {
@@ -165,16 +177,21 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         windowId,
         name,
         command,
+        agent: agentOf(command),
         mark: mark.trim(),
         // The user faces the active pane of the active window.
         isActive: windowActive === '1' && paneActive === '1',
       }
     })
-    .filter(pane => isClaude(pane.command))
-  const sessions = panes.length === 0 ? new Map<string, Registered>() : await registry($)
+    .flatMap(({ agent, ...pane }) => (agent === null ? [] : [{ ...pane, agent }]))
+  const sessions = panes.some(pane => pane.agent === 'claude')
+    ? await registry($)
+    : new Map<string, Registered>()
+  // The registry is Claude Code's: a Codex pane reads by its mark alone, so a
+  // stale Claude entry left in its pane cannot mark it.
   const rows: TmuxPane[] = panes.map(({ mark, ...pane }) => ({
     ...pane,
-    state: stateOf(mark, sessions.get(pane.id)?.status),
+    state: stateOf(mark, pane.agent === 'claude' ? sessions.get(pane.id)?.status : undefined),
   }))
 
   return { inTmux: true, rows }
@@ -301,7 +318,7 @@ export const register: Register = (on, options) => {
     cwd = e.cwd
     await $.command.register({
       name: 'tmux',
-      description: 'Show the interactive Claude Code sessions in this tmux session',
+      description: 'Show the interactive Claude Code and Codex sessions in this tmux session',
     })
     // A start a reload cut short leaves its frame behind, and an ask its [close?].
     await update($, launching, () => null)
@@ -334,55 +351,58 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const { rows } = snap
+    const claudeRows = snap.rows.filter(row => row.agent === 'claude')
+    const codexRows = snap.rows.filter(row => row.agent === 'codex')
     const frame = await read($, launching)
     const asking = await read($, closing)
+
+    const drawRow = (row: TmuxPane) => (
+      <Box key={`row:${row.id}`}>
+        {/* One press anywhere on the row brings its window to the front. */}
+        <Button
+          key={row.id}
+          plain
+          onPress={() => void bringToFront($, row)}
+        >
+          <Text
+            color={row.isActive ? HIGHLIGHT[row.agent] : undefined}
+            weight={row.isActive ? 'bold' : undefined}
+            dimColor={!row.isActive}
+          >
+            {row.isActive ? '▶ ' : '  '}
+            {row.name}
+          </Text>
+          <Text
+            color={SUFFIX[row.state].color}
+            weight={SUFFIX[row.state].weight}
+            dimColor={false}
+          >
+            {SUFFIX[row.state].text}
+          </Text>
+        </Button>
+        <Box marginLeft={1}>
+          <Button
+            key={`close:${row.id}`}
+            plain
+            onPress={() => void pressClose($, row)}
+          >
+            {asking === row.id ? (
+              <Text color="error" weight="bold">[close?]</Text>
+            ) : (
+              <Text dimColor>[x]</Text>
+            )}
+          </Button>
+        </Box>
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
         <Text dimColor>Claude Code</Text>
-        {rows.length === 0 && (
+        {claudeRows.length === 0 && (
           <Text dimColor>No Claude Code sessions in this tmux session.</Text>
         )}
-        {rows.map(row => (
-          <Box key={`row:${row.id}`}>
-            {/* One press anywhere on the row brings its window to the front. */}
-            <Button
-              key={row.id}
-              plain
-              onPress={() => void bringToFront($, row)}
-            >
-              <Text
-                color={row.isActive ? 'claude' : undefined}
-                weight={row.isActive ? 'bold' : undefined}
-                dimColor={!row.isActive}
-              >
-                {row.isActive ? '▶ ' : '  '}
-                {row.name}
-              </Text>
-              <Text
-                color={SUFFIX[row.state].color}
-                weight={SUFFIX[row.state].weight}
-                dimColor={false}
-              >
-                {SUFFIX[row.state].text}
-              </Text>
-            </Button>
-            <Box marginLeft={1}>
-              <Button
-                key={`close:${row.id}`}
-                plain
-                onPress={() => void pressClose($, row)}
-              >
-                {asking === row.id ? (
-                  <Text color="error" weight="bold">[close?]</Text>
-                ) : (
-                  <Text dimColor>[x]</Text>
-                )}
-              </Button>
-            </Box>
-          </Box>
-        ))}
+        {claudeRows.map(drawRow)}
         {frame === null ? (
           <Box marginLeft={2}>
             <Button
@@ -398,6 +418,13 @@ export const register: Register = (on, options) => {
             {'  '}
             {FRAMES[frame % FRAMES.length]} starting Claude Code…
           </Text>
+        )}
+        {/* [new] starts Claude Code, so it stays with the Claude Code rows. */}
+        {codexRows.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor>Codex</Text>
+            {codexRows.map(drawRow)}
+          </Box>
         )}
       </Box>
     )

@@ -1,25 +1,25 @@
 # tmux
 
-A Claude Code mod that adds a pane listing the **interactive Claude Code sessions running in your current tmux session**, and highlights the one you're currently looking at.
+A Claude Code mod that adds a pane listing the **interactive Claude Code and Codex sessions running in your current tmux session**, and highlights the one you're currently looking at.
 
 When you're juggling several Claude Code sessions across tmux windows and panes, this gives you a live roster at a glance: which sessions are alive, what each is working on (from its pane title), and which one is facing you right now.
 
 ## What it shows
 
-- One row per tmux pane that is running Claude Code, named by that session's title.
-- The session **facing you** — the active pane of the active window — is bold, colored, and marked with `▶`. The rest are dimmed.
+- One row per tmux pane that is running Claude Code, named by that session's title, under a `Claude Code` header; below them, under a `Codex` header, one row per pane running the Codex CLI. The `Codex` header shows only while a Codex session runs.
+- The session **facing you** — the active pane of the active window — is bold, colored, and marked with `▶`: in Claude Code's color for a Claude Code session, in Codex blue (`#63A8F8`, the accent of Codex's own TUI) for a Codex one. The rest are dimmed.
 - Each row ends with the session's state: ` -- Active` in green while it works, ` -- Needs you` in bold yellow while it waits on you, ` -- Idle` in white otherwise. The state keeps its color on dimmed rows.
-- Panes that aren't running Claude Code (plain shells, other programs) are left out.
+- Panes that run neither (plain shells, other programs) are left out.
 - Click a row (or focus it and press Enter) to bring that session to the front: its tmux window becomes the current one and its pane the active pane.
 - Click a row's `[x]` to close that session: it turns into `[close?]` for 3 seconds, and a second click kills the session's tmux pane (and its window, where that was the window's only pane). Without the second click it turns back to `[x]`.
 - The list refreshes every couple of seconds, and in every session at once when you click a row, so the highlight is already right in the session you land on.
 - `[new]` at the bottom opens a new tmux window, starts Claude Code in it, spins while it loads, and switches to it once it is ready for input.
 
-A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`); an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
+A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
 
 ## Session state
 
-The state comes from two places:
+A Claude Code session's state comes from two places; a Codex session's from its pane's `@claude_state` option alone, since the registry is Claude Code's:
 
 - **Claude Code's session registry,** `~/.claude/sessions/<pid>.json`. Each interactive session's file names its tmux pane (`"tmux": "<session>:<window_id>.<pane_id>"`) and its `status`. A `waiting` status, which Claude Code sets while a permission prompt waits on you, reads Needs you; a `busy` status reads Active; any other status reads Idle. Where a crash left a second file for the same pane, the newest `startedAt` counts. A file that can't be read (a session exiting mid-poll) is skipped, and an unreadable registry leaves every unmarked row Idle.
 - **The pane's `@claude_state` user option,** which a session sets on its own pane. `pending` reads Needs you, and it wins over a busy status. `active` reads Active, unless the registry says `waiting`. Anything else, or no option at all, defers to the registry. A session marks its pane with:
