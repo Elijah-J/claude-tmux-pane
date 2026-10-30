@@ -6,7 +6,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 
 ## What it shows
 
-- One row per tmux pane that is running Claude Code, named by that session's title, under a `Claude Code` header; below them, under a `Codex` header, one row per pane running the Codex CLI. The `Codex` header shows only while a Codex session runs.
+- One row per tmux pane that is running Claude Code, named by that session's title, under a `Claude Code` header; below them, under a `Codex` header, one row per pane running the Codex CLI. A Codex row opens with the same `✳` bullet a Claude Code session's title does, in place of the spinner Codex puts in its title while it works.
 - The session **facing you** — the active pane of the active window — is bold, colored, and marked with `▶`: in Claude Code's color for a Claude Code session, in Codex blue (`#63A8F8`, the accent of Codex's own TUI) for a Codex one. The rest are dimmed.
 - Each row ends with the session's state: ` -- Active` in green while it works, ` -- Needs you` in bold yellow while it waits on you, ` -- Idle` in white otherwise. The state keeps its color on dimmed rows.
 - Panes that run neither (plain shells, other programs) are left out.
@@ -14,7 +14,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 - Click a row's `[x]` to close that session: it turns into `[close?]` for 3 seconds, and a second click kills the session's tmux pane (and its window, where that was the window's only pane). Without the second click it turns back to `[x]`.
 - The list refreshes every couple of seconds, and in every session at once when you click a row, so the highlight is already right in the session you land on.
 - Rows and `[new]` don't invert under the pointer. A session you leave keeps the pointer where you clicked, so an inverting row would come back as a bar on the row you last clicked there; instead the only highlight is the facing session's colored name.
-- `[new]` at the bottom opens a new tmux window, starts Claude Code in it, spins while it loads, and switches to it once it is ready for input.
+- Each list ends with a `[new]`: it opens a new tmux window, starts Claude Code (or, under `Codex`, Codex) in it, spins while it loads, and switches to it once it is ready for input. Claude Code is ready once it titles its pane with `✳`, Codex once it writes its own title. The `Codex` list shows with its `[new]` even while no Codex session runs.
 
 A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
 
@@ -54,10 +54,10 @@ claude plugin install tmux --marketplace Elijah-J/claude-tmux-pane
 
 The pane opens automatically when a session starts. Run `/tmux` any time to reopen it.
 
-`[new]` types `claude` into the new window's shell, in the working directory of the session you clicked it from. To start sessions another way (with flags, say), set **New session command** in `/config`, or from a shell:
+`[new]` types `claude` (under `Codex`, `codex`) into the new window's shell, in the working directory of the session you clicked it from. To start sessions another way (with flags, say), set **New session command** or **New Codex session command** in `/config`, or from a shell:
 
 ```
-echo '{"new_session_command": "claude --model opus"}' | claude plugin configure tmux@claude-tmux-pane --values-stdin
+echo '{"new_session_command": "claude --model opus", "new_codex_command": "codex"}' | claude plugin configure tmux@claude-tmux-pane --values-stdin
 ```
 
 ## Requirements

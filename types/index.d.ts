@@ -3,7 +3,7 @@ export type TmuxPane = {
   id: string
   /** The tmux id of the window holding the pane, e.g. "@3". */
   windowId: string
-  /** Display name: the pane title (its ✳ state glyph and session title), else the pane id. */
+  /** Display name: the pane title (its ✳ state glyph and session title), else the pane id; a Codex row gets the same ✳ in place of Codex's spinner. */
   name: string
   /** tmux's current foreground command for the pane; a Claude pane reports its version, a Codex pane `codex`. */
   command: string
@@ -28,12 +28,15 @@ export type TmuxSnapshot = {
   rows: TmuxPane[]
 }
 
+/** Each agent's [new] row: its spinner frame while it starts a session; null when idle. */
+export type Launching = Record<Agent, number | null>
+
 declare module 'claude-code' {
   interface PluginState {
     tmux: {
       snapshot: Shaped<TmuxSnapshot>
-      /** The [new] row's spinner frame while it starts a session; null when idle. */
-      launching: number | null
+      /** Each [new] row's spinner frame while it starts a session; null when idle. */
+      launching: Shaped<Launching>
       /** The pane whose [x] was pressed once and asks [close?]; null when none. */
       closing: string | null
     }

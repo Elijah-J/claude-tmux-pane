@@ -34,12 +34,14 @@ const PANES: { window: string; pane: string; command: string; title: string; mar
 // tmux as the mod meets it: list-panes reports the pane in front, select-pane
 // brings one forward, wait-for blocks until wait-for -S wakes every waiter, and
 // new-window opens a shell whose typed command reads as Claude Code, ready for
-// input, from the `readyAt`th display on.
+// input, from the `readyAt`th display on; typed `codex`, it reads as Codex at
+// once and writes its own title from the `readyAt`th display on.
 function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
   const ran: string[][] = []
   const panes = [...PANES, ...extra].map(p => ({ ...p }))
   let front = '%3'
   let displays = 0
+  let typed = ''
   let isUnloaded = false
   let wake = () => {}
   let signalled = new Promise<void>(resolve => (wake = resolve))
@@ -58,7 +60,9 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     const p = panes.find(one => one.pane === pane)
     if (!p) return ''
     displays += 1
-    if (displays >= readyAt) Object.assign(p, { command: '2.1.312', title: '✳ Claude Code' })
+    if (typed.startsWith('codex')) {
+      Object.assign(p, { command: 'codex', title: displays >= readyAt ? 'CorpusForge' : p.title })
+    } else if (displays >= readyAt) Object.assign(p, { command: '2.1.312', title: '✳ Claude Code' })
 
     return `${p.command}\x1f${p.title}\n`
   }
@@ -69,6 +73,7 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     let stdout = ''
     if (argv[1] === 'list-panes') stdout = list()
     if (argv[1] === 'select-pane') front = argv[3] ?? front
+    if (argv[1] === 'send-keys' && argv[4] === '-l') typed = argv[5] ?? ''
     if (argv[1] === 'wait-for' && argv[2] === '-S') signal()
     if (argv[1] === 'kill-pane') {
       const at = panes.findIndex(p => p.pane === argv[3])
@@ -76,7 +81,7 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     }
     if (argv[1] === 'new-window') {
       panes.push({ window: '@7', pane: '%7', command: 'zsh', title: 'host' })
-      stdout = '@7\x1f%7\n'
+      stdout = '@7\x1f%7\x1fhost\n'
     }
     if (argv[1] === 'display') stdout = display(argv[4] ?? '')
 
@@ -143,8 +148,8 @@ test('pressing a row brings its pane and window to the front', async ($, on) => 
     tmux.ran.length = 0
     const ui = await $.ui.mount({ ...PANE, surface })
 
-    // two rows, their two [x], and [new]
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
+    // two rows, their two [x], and the two [new]
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(6)
     await ui.press({ key: '%5' })
 
     expect(tmux.acts()).toEqual([
@@ -194,13 +199,14 @@ test('rows and [new] do not invert under the pointer, so no bar stays where a cl
     expect(hoverOf(tree, '%3')).toEqual({ inverse: false })
     expect(hoverOf(tree, '%5')).toEqual({ inverse: false })
     expect(hoverOf(tree, 'new')).toEqual({ inverse: false, dimColor: true })
+    expect(hoverOf(tree, 'new-codex')).toEqual({ inverse: false, dimColor: true })
     await ui.unmount()
   }
   tmux.unload()
 })
 
 const NEW_WINDOW = [
-  'tmux', 'new-window', '-d', '-P', '-F', '#{window_id}\x1f#{pane_id}', '-c', '/',
+  'tmux', 'new-window', '-d', '-P', '-F', '#{window_id}\x1f#{pane_id}\x1f#{pane_title}', '-c', '/',
 ]
 const DISPLAY = [
   'tmux', 'display', '-p', '-t', '%7', '#{pane_current_command}\x1f#{pane_title}',
@@ -377,8 +383,8 @@ test('with no readable registry every unmarked session is Idle and the list stil
   const { tmux } = await start($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
-  // two rows, their two [x], and [new]
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
+  // two rows, their two [x], and the two [new]
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(6)
   expect((await rowText(ui, '%3')).endsWith(' -- Idle')).toBe(true)
   expect((await rowText(ui, '%5')).endsWith(' -- Idle')).toBe(true)
   await ui.unmount()
@@ -549,8 +555,8 @@ test('Codex sessions list under their own header, the facing one in Codex blue',
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    // four rows, their four [x], and [new]; the shell stays out
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(9)
+    // four rows, their four [x], and the two [new]; the shell stays out
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(10)
     expect(await ui.find({ type: 'Text', text: /^Codex$/ })).toBeDefined()
     expect((await rowText(ui, '%10')).endsWith(' -- Active')).toBe(true)
     expect((await rowText(ui, '%11')).endsWith(' -- Idle')).toBe(true)
@@ -570,7 +576,7 @@ test('Codex sessions list under their own header, the facing one in Codex blue',
   ])
   await clock.advance(0)
   const front = await ui.find({ type: 'Text', text: /▶/ })
-  expect(front?.text).toBe('▶ codex one')
+  expect(front?.text).toBe('▶ ✳ codex one')
   expect(front?.props).toMatchObject({ color: '#63A8F8', weight: 'bold' })
   await ui.unmount()
   tmux.unload()
@@ -590,11 +596,65 @@ test('with only Codex sessions the Claude Code list says it is empty and [new] s
   tmux.unload()
 })
 
-test('without Codex sessions there is no Codex header', async ($, on) => {
+test('without Codex sessions the Codex header still draws, with its [new]', async ($, on) => {
   const { tmux } = await start($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
-  expect(await ui.find({ type: 'Text', text: /^Codex$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Codex$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'new-codex' })).toBeDefined()
   await ui.unmount()
   tmux.unload()
 })
+
+test("a Codex row opens with Claude Code's ✳ bullet, in place of Codex's spinner", async ($, on) => {
+  const { tmux } = await start($, on, 1, [
+    { window: '@10', pane: '%10', command: 'codex', title: 'CorpusForge' },
+    // Codex's title while it works: a braille spinner frame, a space, the rest
+    { window: '@11', pane: '%11', command: 'codex', title: '⠹ fix the build | CorpusForge' },
+  ])
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await ui.find({ type: 'Text', text: /CorpusForge$/ }))?.text).toBe('  ✳ CorpusForge')
+  expect((await ui.find({ type: 'Text', text: /fix the build/ }))?.text).toBe('  ✳ fix the build | CorpusForge')
+  // a Claude Code title already opens with its own ✳ and is drawn as written
+  expect((await ui.find({ type: 'Text', text: /other session/ }))?.text).toBe('  other session')
+  await ui.unmount()
+  tmux.unload()
+})
+
+test(
+  "Codex's [new] starts the configured command and switches once Codex writes its title",
+  { options: { new_codex_command: 'codex --yolo' } },
+  async ($, on) => {
+    const { clock, tmux } = await start($, on, 3)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const spinner = async () => (await ui.find({ type: 'Text', text: /starting/ }))?.text
+    tmux.ran.length = 0
+
+    await ui.press({ key: 'new-codex' })
+
+    // codex runs at once, but its title is still the window's first
+    expect(await spinner()).toBe('  ◐ starting Codex…')
+    expect(await ui.find({ key: 'new-codex' })).toBeUndefined()
+    // the Claude Code [new] stays pressable meanwhile
+    expect(await ui.find({ key: 'new' })).toBeDefined()
+    await clock.advance(150)
+    expect(await spinner()).toBe('  ◓ starting Codex…')
+    expect(tmux.acts().some(argv => argv[1] === 'select-window')).toBe(false)
+
+    await clock.advance(150)
+    expect(await spinner()).toBeUndefined()
+    expect(tmux.acts()).toEqual([
+      NEW_WINDOW,
+      ['tmux', 'send-keys', '-t', '%7', '-l', 'codex --yolo'],
+      ['tmux', 'send-keys', '-t', '%7', 'Enter'],
+      DISPLAY,
+      DISPLAY,
+      DISPLAY,
+      ...SWITCH,
+    ])
+    await ui.unmount()
+    tmux.unload()
+  },
+)

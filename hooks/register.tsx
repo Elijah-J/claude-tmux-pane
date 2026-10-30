@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Agent, SessionState, TmuxPane, TmuxSnapshot } from '../types'
+import type { Agent, Launching, SessionState, TmuxPane, TmuxSnapshot } from '../types'
 
 const PANE = 'tmux-sessions'
 
@@ -104,10 +104,12 @@ const SUFFIX: Record<SessionState, { text: string; color: 'green' | 'yellow' | '
   idle: { text: ' -- Idle', color: 'white' },
 }
 
-// The spinner frame of the [new] row while it starts a session; null when idle.
+// Each [new] row's spinner frame while it starts a session; null when idle.
+// The tag declines the single frame an earlier version stored.
 const launching = atom(
   { plugin: 'tmux', key: 'launching' } as const,
-  null as number | null,
+  { claude: null, codex: null } as Launching,
+  { shape: 'launching-2' },
 )
 
 // The pane whose [x] was pressed once and now asks [close?]; null when none.
@@ -147,6 +149,27 @@ function agentOf(command: string): Agent | null {
 // Blue 200 (`UI_ACCENT` in codex-rs/tui/src/style.rs, Codex 0.165.0).
 const HIGHLIGHT: Record<Agent, string> = { claude: 'claude', codex: '#63A8F8' }
 
+// Codex opens its title with one of these frames while it works
+// (TERMINAL_TITLE_SPINNER_FRAMES in codex-rs/tui/src/chatwidget/status_surfaces.rs,
+// Codex 0.165.0); the row's state already says so.
+const CODEX_SPINNER = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /
+
+// A Claude Code pane's title opens with Claude's ✳; a Codex row gets the same
+// bullet in place of Codex's spinner.
+function nameOf(agent: Agent, title: string): string {
+  return agent === 'codex' ? `✳ ${title.replace(CODEX_SPINNER, '')}` : title
+}
+
+const AGENT_NAME: Record<Agent, string> = { claude: 'Claude Code', codex: 'Codex' }
+
+// When the session [new] started waits for input: Claude Code titles its pane
+// with ✳ then; Codex writes its own title once its prompt is up (measured
+// 2026-10-30: about 1.9 s after it starts), so any title but the window's first.
+const isReady: Record<Agent, (command: string, title: string, opened: string) => boolean> = {
+  claude: (command, title) => isClaude(command) && title.startsWith('✳'),
+  codex: (command, title, opened) => agentOf(command) === 'codex' && title !== opened,
+}
+
 async function probe($: EngineInterface): Promise<TmuxSnapshot> {
   let result
   try {
@@ -171,13 +194,14 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         mark = '',
         ...rest
       ] = line.split(SEP)
-      const name = (rest.join(SEP) || id).trim()
+      const title = (rest.join(SEP) || id).trim()
+      const agent = agentOf(command)
       return {
         id,
         windowId,
-        name,
+        name: agent === null ? title : nameOf(agent, title),
         command,
-        agent: agentOf(command),
+        agent,
         mark: mark.trim(),
         // The user faces the active pane of the active window.
         isActive: windowActive === '1' && paneActive === '1',
@@ -249,10 +273,11 @@ async function pressClose($: EngineInterface, row: Pick<TmuxPane, 'id'>): Promis
   if (ask === asks) await update($, closing, id => (id === row.id ? null : id))
 }
 
-// Open a new window in this tmux session, start Claude Code in it, and bring it
-// to the front once the new session waits for input.
-async function startSession($: EngineInterface, command: string): Promise<void> {
-  await update($, launching, () => 0)
+// Open a new window in this tmux session, start Claude Code or Codex in it, and
+// bring it to the front once the new session waits for input.
+async function startSession($: EngineInterface, agent: Agent, command: string): Promise<void> {
+  const spin = (frame: number | null) => update($, launching, l => ({ ...l, [agent]: frame }))
+  await spin(0)
   try {
     // Given no command, tmux runs a login shell in the new window, as the
     // sessions here run in; -d keeps this window in front while the row spins.
@@ -262,11 +287,11 @@ async function startSession($: EngineInterface, command: string): Promise<void> 
       '-d',
       '-P',
       '-F',
-      `#{window_id}${SEP}#{pane_id}`,
+      `#{window_id}${SEP}#{pane_id}${SEP}#{pane_title}`,
       ...(cwd ? ['-c', cwd] : []),
     ])
     if (created.exitCode !== 0) return
-    const [windowId = '', id = ''] = created.stdout.trim().split(SEP)
+    const [windowId = '', id = '', opened = ''] = created.stdout.replace(/\n$/, '').split(SEP)
     // Typed into that shell, the command runs as if typed by hand.
     await $.process.run(['tmux', 'send-keys', '-t', id, '-l', command])
     await $.process.run(['tmux', 'send-keys', '-t', id, 'Enter'])
@@ -282,15 +307,14 @@ async function startSession($: EngineInterface, command: string): Promise<void> 
       ])
       // The window was closed while starting.
       if (shown.exitCode !== 0) return
-      const [current = '', title = ''] = shown.stdout.trim().split(SEP)
-      // Claude Code titles its pane with ✳ once it waits for input.
-      if (isClaude(current) && title.startsWith('✳')) break
+      const [current = '', title = ''] = shown.stdout.replace(/\n$/, '').split(SEP)
+      if (isReady[agent](current, title, opened)) break
       await $.clock.sleep(TICK_MS)
-      await update($, launching, () => tick)
+      await spin(tick)
     }
     await bringToFront($, { id, windowId })
   } finally {
-    await update($, launching, () => null)
+    await spin(null)
   }
 }
 
@@ -312,7 +336,10 @@ async function watchClicks($: EngineInterface): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
-  const newSessionCommand = String(options.new_session_command)
+  const newCommand: Record<Agent, string> = {
+    claude: String(options.new_session_command),
+    codex: String(options.new_codex_command),
+  }
 
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
@@ -321,7 +348,7 @@ export const register: Register = (on, options) => {
       description: 'Show the interactive Claude Code and Codex sessions in this tmux session',
     })
     // A start a reload cut short leaves its frame behind, and an ask its [close?].
-    await update($, launching, () => null)
+    await update($, launching, () => ({ claude: null, codex: null }))
     await update($, closing, () => null)
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
@@ -353,7 +380,7 @@ export const register: Register = (on, options) => {
 
     const claudeRows = snap.rows.filter(row => row.agent === 'claude')
     const codexRows = snap.rows.filter(row => row.agent === 'codex')
-    const frame = await read($, launching)
+    const frames = await read($, launching)
     const asking = await read($, closing)
 
     const drawRow = (row: TmuxPane) => (
@@ -401,6 +428,30 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    // Each agent's [new] ends its list. It switches windows too, so it stays
+    // dim and uninverted under the pointer, as the rows do; its keyed Box
+    // scopes the hover.
+    const drawNew = (agent: Agent) => {
+      const frame = frames[agent]
+      return frame === null ? (
+        <Box key={`new-row:${agent}`} marginLeft={2}>
+          <Button
+            key={agent === 'claude' ? 'new' : 'new-codex'}
+            label="[new]"
+            plain
+            dimColor
+            hover={{ inverse: false, dimColor: true }}
+            onPress={() => void startSession($, agent, newCommand[agent])}
+          />
+        </Box>
+      ) : (
+        <Text dimColor>
+          {'  '}
+          {FRAMES[frame % FRAMES.length]} starting {AGENT_NAME[agent]}…
+        </Text>
+      )
+    }
+
     return (
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
         <Text dimColor>Claude Code</Text>
@@ -408,32 +459,13 @@ export const register: Register = (on, options) => {
           <Text dimColor>No Claude Code sessions in this tmux session.</Text>
         )}
         {claudeRows.map(drawRow)}
-        {frame === null ? (
-          // [new] switches windows too, so it stays dim and uninverted under
-          // the pointer, as the rows do; its keyed Box scopes the hover.
-          <Box key="new-row" marginLeft={2}>
-            <Button
-              key="new"
-              label="[new]"
-              plain
-              dimColor
-              hover={{ inverse: false, dimColor: true }}
-              onPress={() => void startSession($, newSessionCommand)}
-            />
-          </Box>
-        ) : (
-          <Text dimColor>
-            {'  '}
-            {FRAMES[frame % FRAMES.length]} starting Claude Code…
-          </Text>
-        )}
-        {/* [new] starts Claude Code, so it stays with the Claude Code rows. */}
-        {codexRows.length > 0 && (
-          <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>Codex</Text>
-            {codexRows.map(drawRow)}
-          </Box>
-        )}
+        {drawNew('claude')}
+        {/* Drawn with no Codex session too, so its [new] can start one. */}
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>Codex</Text>
+          {codexRows.map(drawRow)}
+          {drawNew('codex')}
+        </Box>
       </Box>
     )
   })

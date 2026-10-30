@@ -1,14 +1,20 @@
 {
   "name": "tmux",
-  "version": "0.6.1",
-  "description": "A pane listing the interactive Claude Code and Codex sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, its [x] twice to close it, or [new] to start another.",
+  "version": "0.7.0",
+  "description": "A pane listing the interactive Claude Code and Codex sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, its [x] twice to close it, or a [new] to start another Claude Code or Codex session.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "new_session_command": {
       "type": "string",
       "title": "New session command",
-      "description": "The command line the [new] row types into the new tmux window's shell",
+      "description": "The command line the Claude Code [new] row types into the new tmux window's shell",
       "default": "claude"
+    },
+    "new_codex_command": {
+      "type": "string",
+      "title": "New Codex session command",
+      "description": "The command line the Codex [new] row types into the new tmux window's shell",
+      "default": "codex"
     }
   }
 }
