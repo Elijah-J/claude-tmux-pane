@@ -226,13 +226,42 @@ async function refresh($: EngineInterface): Promise<void> {
   await update($, snapshot, () => snap)
 }
 
+// The command that draws this list in a pane beside a Codex window, which has
+// no mods to draw it; empty, Codex windows get none.
+let rosterCommand = ''
+
+// Give a Codex window a pane running rosterCommand beside its Codex pane, as wide
+// as this pane's dock, unless a pane of it carries @claude_roster 1. The new pane
+// is marked at once, so a second press cannot add another.
+async function ensureRoster($: EngineInterface, row: Pick<TmuxPane, 'id' | 'windowId'>): Promise<void> {
+  const marks = await $.process.run(['tmux', 'list-panes', '-t', row.windowId, '-F', '#{@claude_roster}'])
+  if (marks.exitCode !== 0 || marks.stdout.split('\n').some(mark => mark.trim() === '1')) return
+  const split = await $.process.run([
+    'tmux',
+    'split-window',
+    '-h',
+    '-d',
+    '-l',
+    '32%',
+    '-P',
+    '-F',
+    '#{pane_id}',
+    '-t',
+    row.id,
+    rosterCommand,
+  ])
+  if (split.exitCode !== 0) return
+  await $.process.run(['tmux', 'set-option', '-p', '-t', split.stdout.trim(), '@claude_roster', '1'])
+}
+
 // Bring a row's pane to the front: make it the active pane of its window, then
 // make that window the current one. Pane and window IDs are unique for the life
 // of the tmux server, so neither target can hit the wrong pane or window.
 async function bringToFront(
   $: EngineInterface,
-  row: Pick<TmuxPane, 'id' | 'windowId'>,
+  row: Pick<TmuxPane, 'id' | 'windowId' | 'agent'>,
 ): Promise<void> {
+  if (row.agent === 'codex' && rosterCommand !== '') await ensureRoster($, row)
   await $.process.run(['tmux', 'select-pane', '-t', row.id])
   await $.process.run(['tmux', 'select-window', '-t', row.windowId])
   // Every session re-probes, this one included. A pane closed since the last
@@ -312,7 +341,7 @@ async function startSession($: EngineInterface, agent: Agent, command: string): 
       await $.clock.sleep(TICK_MS)
       await spin(tick)
     }
-    await bringToFront($, { id, windowId })
+    await bringToFront($, { id, windowId, agent })
   } finally {
     await spin(null)
   }
@@ -340,6 +369,7 @@ export const register: Register = (on, options) => {
     claude: String(options.new_session_command),
     codex: String(options.new_codex_command),
   }
+  rosterCommand = String(options.codex_roster_command ?? '').trim()
 
   on('session.start', async ($, e, next) => {
     cwd = e.cwd

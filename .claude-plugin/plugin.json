@@ -1,6 +1,6 @@
 {
   "name": "tmux",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A pane listing the interactive Claude Code and Codex sessions in the current tmux session, showing each one's state (Active, Needs you, Idle) and highlighting the one facing the user; click one to bring it to the front, its [x] twice to close it, or a [new] to start another Claude Code or Codex session.",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -15,6 +15,12 @@
       "title": "New Codex session command",
       "description": "The command line the Codex [new] row types into the new tmux window's shell",
       "default": "codex"
+    },
+    "codex_roster_command": {
+      "type": "string",
+      "title": "Codex window list command",
+      "description": "The command a Codex window brought to the front or started by [new] runs in a pane beside Codex to show this list, such as tmux-roster; empty for none",
+      "default": ""
     }
   }
 }

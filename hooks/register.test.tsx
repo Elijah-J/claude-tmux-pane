@@ -25,7 +25,7 @@ const COMMAND = {
 
 // One pane per window: two Claude sessions and a shell. `mark` is the pane's
 // @claude_state user option, empty when unset.
-const PANES: { window: string; pane: string; command: string; title: string; mark?: string }[] = [
+const PANES: { window: string; pane: string; command: string; title: string; mark?: string; roster?: boolean }[] = [
   { window: '@3', pane: '%3', command: '2.1.312', title: 'this session' },
   { window: '@5', pane: '%5', command: '2.1.312', title: 'other session' },
   { window: '@6', pane: '%6', command: 'zsh', title: 'a shell' },
@@ -71,7 +71,21 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     const argv = [...e.argv]
     ran.push(argv)
     let stdout = ''
-    if (argv[1] === 'list-panes') stdout = list()
+    if (argv[1] === 'list-panes') {
+      // `-t <window>` reads that window's @claude_roster marks; the probe lists all
+      stdout = argv[2] === '-t'
+        ? panes.filter(p => p.window === argv[3]).map(p => (p.roster ? '1' : '')).join('\n')
+        : list()
+    }
+    if (argv[1] === 'split-window') {
+      const beside = panes.find(p => p.pane === argv[10])
+      panes.push({ window: beside?.window ?? '', pane: '%50', command: 'tmux-roster', title: 'host' })
+      stdout = '%50\n'
+    }
+    if (argv[1] === 'set-option' && argv[5] === '@claude_roster') {
+      const marked = panes.find(p => p.pane === argv[4])
+      if (marked) marked.roster = true
+    }
     if (argv[1] === 'select-pane') front = argv[3] ?? front
     if (argv[1] === 'send-keys' && argv[4] === '-l') typed = argv[5] ?? ''
     if (argv[1] === 'wait-for' && argv[2] === '-S') signal()
@@ -658,3 +672,64 @@ test(
     tmux.unload()
   },
 )
+
+const ROSTER = (pane: string, window: string) => [
+  ['tmux', 'list-panes', '-t', window, '-F', '#{@claude_roster}'],
+  ['tmux', 'split-window', '-h', '-d', '-l', '32%', '-P', '-F', '#{pane_id}', '-t', pane, 'tmux-roster'],
+  ['tmux', 'set-option', '-p', '-t', '%50', '@claude_roster', '1'],
+]
+
+test(
+  'a Codex row brought forward gets the list beside it once, and a Claude Code row none',
+  { options: { codex_roster_command: ' tmux-roster ' } },
+  async ($, on) => {
+    const { tmux } = await start($, on, 1, CODEX)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    tmux.ran.length = 0
+    await ui.press({ key: '%10' })
+    // the probes and the waits aside, with the roster's own mark read
+    const read = (argv: string[]) => argv[1] === 'list-panes' && argv[2] === '-t'
+    expect(tmux.ran.filter(argv => read(argv) || tmux.acts().includes(argv))).toEqual([
+      ...ROSTER('%10', '@10'),
+      ['tmux', 'select-pane', '-t', '%10'],
+      ['tmux', 'select-window', '-t', '@10'],
+      ['tmux', 'wait-for', '-S', 'claude-tmux-pane'],
+    ])
+    // the window holds its list now: a second press only switches
+    tmux.ran.length = 0
+    await ui.press({ key: '%10' })
+    expect(tmux.ran.some(argv => argv[1] === 'split-window')).toBe(false)
+    expect(tmux.ran).toContainEqual(['tmux', 'list-panes', '-t', '@10', '-F', '#{@claude_roster}'])
+    tmux.ran.length = 0
+    await ui.press({ key: '%5' })
+    expect(tmux.ran.some(argv => argv[2] === '-t' && argv[1] === 'list-panes')).toBe(false)
+    await ui.unmount()
+    tmux.unload()
+  },
+)
+
+test(
+  "Codex's [new] gives the new window the list before switching to it",
+  { options: { codex_roster_command: 'tmux-roster' } },
+  async ($, on) => {
+    const { clock, tmux } = await start($, on, 1)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    tmux.ran.length = 0
+    await ui.press({ key: 'new-codex' })
+    await clock.advance(150)
+    expect(tmux.acts().slice(-5)).toEqual([...ROSTER('%7', '@7').slice(1), ...SWITCH])
+    expect(tmux.ran).toContainEqual(ROSTER('%7', '@7')[0])
+    await ui.unmount()
+    tmux.unload()
+  },
+)
+
+test('without a list command a Codex row only switches', async ($, on) => {
+  const { tmux } = await start($, on, 1, CODEX)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  tmux.ran.length = 0
+  await ui.press({ key: '%11' })
+  expect(tmux.ran.some(argv => argv[1] === 'split-window' || argv[2] === '-t' && argv[1] === 'list-panes')).toBe(false)
+  await ui.unmount()
+  tmux.unload()
+})
