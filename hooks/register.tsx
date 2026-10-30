@@ -358,10 +358,15 @@ export const register: Register = (on, options) => {
 
     const drawRow = (row: TmuxPane) => (
       <Box key={`row:${row.id}`}>
-        {/* One press anywhere on the row brings its window to the front. */}
+        {/* One press anywhere on the row brings its window to the front. A
+            session left behind keeps the pointer where the click was, and a
+            Button inverts under the pointer, so on coming back the row
+            clicked there would be a bar: the row never inverts (measured
+            2026-10-30), and only the facing row's name is colored. */}
         <Button
           key={row.id}
           plain
+          hover={{ inverse: false }}
           onPress={() => void bringToFront($, row)}
         >
           <Text
@@ -404,12 +409,15 @@ export const register: Register = (on, options) => {
         )}
         {claudeRows.map(drawRow)}
         {frame === null ? (
-          <Box marginLeft={2}>
+          // [new] switches windows too, so it stays dim and uninverted under
+          // the pointer, as the rows do; its keyed Box scopes the hover.
+          <Box key="new-row" marginLeft={2}>
             <Button
               key="new"
               label="[new]"
               plain
               dimColor
+              hover={{ inverse: false, dimColor: true }}
               onPress={() => void startSession($, newSessionCommand)}
             />
           </Box>

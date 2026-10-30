@@ -173,6 +173,32 @@ test('a click in another session moves the highlight before the next poll', asyn
   tmux.unload()
 })
 
+// The `hover` the drawn tree gives the Button keyed `key`; `find` leaves it out.
+function hoverOf(node: any, key: string): unknown {
+  if (typeof node !== 'object' || node === null) return undefined
+  if (node.type === 'Button' && node.props?.key === key) return node.hover
+  for (const child of node.children ?? []) {
+    const hover = hoverOf(child, key)
+    if (hover !== undefined) return hover
+  }
+
+  return undefined
+}
+
+test('rows and [new] do not invert under the pointer, so no bar stays where a click left it', async ($, on) => {
+  const { tmux } = await start($, on)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const tree = await ui.drawn()
+    expect(hoverOf(tree, '%3')).toEqual({ inverse: false })
+    expect(hoverOf(tree, '%5')).toEqual({ inverse: false })
+    expect(hoverOf(tree, 'new')).toEqual({ inverse: false, dimColor: true })
+    await ui.unmount()
+  }
+  tmux.unload()
+})
+
 const NEW_WINDOW = [
   'tmux', 'new-window', '-d', '-P', '-F', '#{window_id}\x1f#{pane_id}', '-c', '/',
 ]

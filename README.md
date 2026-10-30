@@ -13,6 +13,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 - Click a row (or focus it and press Enter) to bring that session to the front: its tmux window becomes the current one and its pane the active pane.
 - Click a row's `[x]` to close that session: it turns into `[close?]` for 3 seconds, and a second click kills the session's tmux pane (and its window, where that was the window's only pane). Without the second click it turns back to `[x]`.
 - The list refreshes every couple of seconds, and in every session at once when you click a row, so the highlight is already right in the session you land on.
+- Rows and `[new]` don't invert under the pointer. A session you leave keeps the pointer where you clicked, so an inverting row would come back as a bar on the row you last clicked there; instead the only highlight is the facing session's colored name.
 - `[new]` at the bottom opens a new tmux window, starts Claude Code in it, spins while it loads, and switches to it once it is ready for input.
 
 A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
