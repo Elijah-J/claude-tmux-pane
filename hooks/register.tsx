@@ -68,23 +68,26 @@ function parseEntry(text: string): (Registered & { paneId: string }) | null {
 // the binary runs under its own name; `ps` gives the name or the full path.
 const CLAUDE_PROCESS = /^(claude|\d+\.\d+\.\d+.*)$/
 
-// Of `pids`, those still running as Claude Code. `ps -p` lists each live pid
-// asked about, skips a dead one, and exits 1 when none is left (measured
-// 2026-10-31); a pid a stale entry names may since belong to another program.
+// How long one `ps` may take before its pid counts as not running.
+const PS_TIMEOUT_MS = 2000
+
+// Of `pids`, those still running as Claude Code, one `ps -p <pid>` each: a
+// comma list of pids hung `ps` here while each pid alone answered at once
+// (measured 2026-10-31). A dead pid prints nothing; a pid a stale entry names
+// may since belong to another program.
 async function liveClaude($: EngineInterface, pids: number[]): Promise<Set<number>> {
   const live = new Set<number>()
-  if (pids.length === 0) return live
-  let result
-  try {
-    result = await $.process.run(['ps', '-o', 'pid=,comm=', '-p', pids.join(',')])
-  } catch {
-    return live
-  }
-  for (const line of result.stdout.split('\n')) {
-    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
-    if (!match) continue
+  for (const pid of pids) {
+    let result
+    try {
+      result = await $.process.run(['ps', '-o', 'pid=,comm=', '-p', String(pid)], { timeoutMs: PS_TIMEOUT_MS })
+    } catch {
+      continue
+    }
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout.split('\n')[0] ?? '')
+    if (!match || Number(match[1]) !== pid) continue
     const name = (match[2] ?? '').slice((match[2] ?? '').lastIndexOf('/') + 1)
-    if (CLAUDE_PROCESS.test(name)) live.add(Number(match[1]))
+    if (CLAUDE_PROCESS.test(name)) live.add(pid)
   }
 
   return live
@@ -278,9 +281,33 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
   return { inTmux: true, rows }
 }
 
+// One probe at a time: a refresh asked for while one runs is folded into a
+// single rerun after it, so a slow command never piles up behind the 2 s timer
+// (measured 2026-10-31: hung `ps` children piled up to 167) and a click still
+// gets a fresh probe.
+let isProbing = false
+let isRerunAsked = false
+
 async function refresh($: EngineInterface): Promise<void> {
-  const snap = await probe($)
-  await update($, snapshot, () => snap)
+  if (isProbing) {
+    isRerunAsked = true
+    return
+  }
+  isProbing = true
+  try {
+    do {
+      isRerunAsked = false
+      try {
+        const snap = await probe($)
+        await update($, snapshot, () => snap)
+      } catch {
+        // an unloading module refuses the write; the next poll tries again
+        return
+      }
+    } while (isRerunAsked)
+  } finally {
+    isProbing = false
+  }
 }
 
 // The command that draws this list in a pane beside a Codex window, which has
