@@ -44,6 +44,8 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
   let displays = 0
   let typed = ''
   let isUnloaded = false
+  // The processes `ps` finds, pid to command name.
+  const procs: Record<string, string> = {}
   let wake = () => {}
   let signalled = new Promise<void>(resolve => (wake = resolve))
   const signal = () => {
@@ -104,6 +106,20 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
       stdout = '@7\x1f%7\n'
     }
     if (argv[1] === 'display') stdout = display(argv[4] ?? '')
+    // `ps -o pid=,comm= -p <pids>`: one line per live pid asked about; none, exit 1
+    if (argv[0] === 'ps') {
+      const asked = (argv[4] ?? '').split(',')
+      stdout = asked.filter(pid => procs[pid] !== undefined).map(pid => `${pid.padStart(5)} ${procs[pid]}`).join('\n')
+      return {
+        value: {
+          exitCode: stdout === '' ? 1 : 0,
+          stdout: stdout === '' ? '' : `${stdout}\n`,
+          stderr: '',
+          isStdoutTruncated: false,
+          isStderrTruncated: false,
+        },
+      }
+    }
 
     return {
       value: {
@@ -129,6 +145,7 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
   return {
     ran,
     panes,
+    procs,
     // What the mod ran but the probes and the waits on the channel.
     acts: () =>
       ran.filter(
@@ -318,6 +335,43 @@ test('an interactive claude-codex pane lists as Claude Code; a headless one does
   expect(await ui.find({ type: 'Text', text: /gateway session/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /host\.local/ })).toBeUndefined()
   await ui.unmount()
+  tmux.unload()
+})
+
+test('a Claude Code a launcher script runs lists by its registry entry; a stale entry or another process does not', async ($, on) => {
+  // Each pane's command is the launcher's shell, which owns the pane (measured
+  // 2026-10-31: `sh launch.sh` running claude-codex reads `bash`).
+  const extra = [
+    { window: '@10', pane: '%10', command: 'bash', title: '✳ wrapped session' },
+    { window: '@11', pane: '%11', command: 'bash', title: '✳ crashed session' },
+    { window: '@12', pane: '%12', command: 'bash', title: 'reused pid' },
+  ]
+  fakeRegistry(on, {
+    [`${SESSIONS}/1000.json`]: entry(1000, '0:@10.%10', 'busy', 1),
+    [`${SESSIONS}/1100.json`]: entry(1100, '0:@11.%11', 'busy', 1),
+    [`${SESSIONS}/1200.json`]: entry(1200, '0:@12.%12', 'idle', 1),
+  })
+  const { tmux } = await start($, on, 1, extra)
+  // 1000 is the wrapped claude; 1100 is gone; 1200 now belongs to another program
+  Object.assign(tmux.procs, { '1000': 'claude', '1200': '/usr/bin/vim' })
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await rowText(ui, '%10')).toBe('  ✳ wrapped session -- Active')
+  expect(await ui.find({ type: 'Text', text: /crashed session/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /reused pid/ })).toBeUndefined()
+  // one ps for the panes no command names, never for the shell with no entry
+  const asked = tmux.ran.filter(argv => argv[0] === 'ps').at(-1)
+  expect(asked?.slice(0, 4)).toEqual(['ps', '-o', 'pid=,comm=', '-p'])
+  expect(asked?.[4]?.split(',').sort()).toEqual(['1000', '1100', '1200'])
+  await ui.unmount()
+  tmux.unload()
+})
+
+test('a session that starts signals the channel, so every other session lists it at once', async ($, on) => {
+  const { tmux } = await start($, on)
+
+  expect(tmux.ran).toContainEqual(['tmux', 'wait-for', '-S', 'claude-tmux-pane'])
   tmux.unload()
 })
 

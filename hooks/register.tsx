@@ -40,7 +40,7 @@ const snapshot = atom(
 // person (measured 2026-10-29).
 const SESSIONS_DIR = '.claude/sessions'
 
-type Registered = { status: string; startedAt: number }
+type Registered = { pid: number; status: string; startedAt: number }
 
 function parseEntry(text: string): (Registered & { paneId: string }) | null {
   let value: unknown
@@ -50,7 +50,7 @@ function parseEntry(text: string): (Registered & { paneId: string }) | null {
     return null
   }
   if (typeof value !== 'object' || value === null) return null
-  const { kind, tmux, status, startedAt } = value as Record<string, unknown>
+  const { pid, kind, tmux, status, startedAt } = value as Record<string, unknown>
   // A headless run started from a pane names that pane too.
   if (kind !== 'interactive' || typeof tmux !== 'string') return null
   const paneId = tmux.slice(tmux.lastIndexOf('.') + 1)
@@ -58,9 +58,36 @@ function parseEntry(text: string): (Registered & { paneId: string }) | null {
 
   return {
     paneId,
+    pid: typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : 0,
     status: typeof status === 'string' ? status : '',
     startedAt: typeof startedAt === 'number' ? startedAt : 0,
   }
+}
+
+// Claude Code's process names itself `claude`, or reads as its version where
+// the binary runs under its own name; `ps` gives the name or the full path.
+const CLAUDE_PROCESS = /^(claude|\d+\.\d+\.\d+.*)$/
+
+// Of `pids`, those still running as Claude Code. `ps -p` lists each live pid
+// asked about, skips a dead one, and exits 1 when none is left (measured
+// 2026-10-31); a pid a stale entry names may since belong to another program.
+async function liveClaude($: EngineInterface, pids: number[]): Promise<Set<number>> {
+  const live = new Set<number>()
+  if (pids.length === 0) return live
+  let result
+  try {
+    result = await $.process.run(['ps', '-o', 'pid=,comm=', '-p', pids.join(',')])
+  } catch {
+    return live
+  }
+  for (const line of result.stdout.split('\n')) {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
+    if (!match) continue
+    const name = (match[2] ?? '').slice((match[2] ?? '').lastIndexOf('/') + 1)
+    if (CLAUDE_PROCESS.test(name)) live.add(Number(match[1]))
+  }
+
+  return live
 }
 
 // Each pane's session: a crashed session's file can outlive it, so the newest
@@ -200,7 +227,7 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
   }
   if (result.exitCode !== 0) return { inTmux: false, rows: [] }
 
-  const panes = result.stdout
+  const all = result.stdout
     .split('\n')
     .filter(line => line.length > 0)
     .map(line => {
@@ -218,6 +245,7 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
       return {
         id,
         windowId,
+        title,
         name: agent === null ? title : nameOf(agent, title),
         command,
         agent,
@@ -226,10 +254,20 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         isActive: windowActive === '1' && paneActive === '1',
       }
     })
-    .flatMap(({ agent, ...pane }) => (agent === null ? [] : [{ ...pane, agent }]))
-  const sessions = panes.some(pane => pane.agent === 'claude')
-    ? await registry($)
-    : new Map<string, Registered>()
+  const sessions = await registry($)
+  // A Claude Code that a launcher script runs as its child leaves the script's
+  // shell as the pane's command (measured 2026-10-31: `sh launch.sh` running
+  // claude-codex reads `bash`). Its registry entry names the pane, and a live
+  // Claude Code process under that entry's pid confirms it.
+  const wrapped = all.filter(pane => pane.agent === null && (sessions.get(pane.id)?.pid ?? 0) > 0)
+  const live = await liveClaude($, wrapped.map(pane => sessions.get(pane.id)?.pid ?? 0))
+  const panes = all
+    .map(pane =>
+      pane.agent === null && live.has(sessions.get(pane.id)?.pid ?? 0)
+        ? { ...pane, agent: 'claude' as const, name: pane.title }
+        : pane,
+    )
+    .flatMap(({ agent, title: _title, ...pane }) => (agent === null ? [] : [{ ...pane, agent }]))
   // The registry is Claude Code's: a Codex pane reads by its mark alone, so a
   // stale Claude entry left in its pane cannot mark it.
   const rows: TmuxPane[] = panes.map(({ mark, ...pane }) => ({
@@ -411,6 +449,8 @@ export const register: Register = (on, options) => {
     void $.ui.open({ id: PANE, title: 'tmux' })
     void refresh($)
     void watchClicks($)
+    // Every other session re-probes now and lists this one, not on its next poll.
+    void $.process.run(['tmux', 'wait-for', '-S', CHANNEL]).catch(() => {})
     // Keep the list live; a hot reload drops this timer with the module.
     $.clock.every(2000, () => void refresh($))
 

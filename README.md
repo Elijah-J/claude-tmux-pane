@@ -19,7 +19,9 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 
 - Codex has no mods, so a Codex window can't draw this list itself. Set **Codex window list command** to a program that draws it in a terminal pane, such as `tmux-roster`, and a Codex window you bring to the front, or start with `[new]`, gets it in a pane beside Codex, as wide as this pane, unless a pane of that window already carries the `@claude_roster` option set to `1`. The new pane is marked so at once. Empty (the default), Codex windows get none. Its clicks need `set -g mouse on` in `~/.tmux.conf`.
 
-A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. A session started by `claude-codex run` reports `claude-codex`, and counts as Claude Code once its title opens with `✳`, which a headless one in a pane never does. Subagent sessions aren't tmux panes, so they don't appear.
+A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. A session started by `claude-codex run` reports `claude-codex`, and counts as Claude Code once its title opens with `✳`, which a headless one in a pane never does. A session a launcher script runs as its child leaves the script's shell as the pane's command; it counts as Claude Code when an interactive entry in Claude Code's session registry (below) names the pane and `ps` finds that entry's pid still running as Claude Code. Subagent sessions aren't tmux panes, so they don't appear.
+
+The list re-probes every 2 seconds, and at once whenever any session starts: a starting session signals every other one.
 
 ## Session state
 
