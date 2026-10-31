@@ -150,6 +150,7 @@ async function start($: Parameters<TestBody>[0], on: On, readyAt = 1, extra: typ
   on('command.register', () => ({ value: { command: 'tmux' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  mock.env(on, ENV)
   const clock = mock.clock(on)
   const tmux = fakeTmux(on, readyAt, extra)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -157,6 +158,25 @@ async function start($: Parameters<TestBody>[0], on: On, readyAt = 1, extra: typ
 
   return { clock, tmux }
 }
+
+test("outside tmux a running server's sessions are not listed as this session's", async ($, on) => {
+  on('command.register', () => ({ value: { command: 'tmux' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  mock.env(on, { HOME })
+  mock.clock(on)
+  // the server answers list-panes for its most recently used session
+  const tmux = fakeTmux(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run(COMMAND)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect((await ui.find({ type: 'Text', text: /Not in a tmux session/ }))?.text).toBe('Not in a tmux session.')
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  expect(tmux.ran.some(argv => argv[1] === 'list-panes')).toBe(false)
+  await ui.unmount()
+  tmux.unload()
+})
 
 test('pressing a row brings its pane and window to the front', async ($, on) => {
   const { tmux } = await start($, on)
@@ -290,6 +310,8 @@ test('[new] spins until the new session waits for input, then switches', async (
 })
 
 const HOME = '/Users/me'
+// This session runs in the fake's pane %3.
+const ENV = { HOME, TMUX_PANE: '%3' }
 const SESSIONS = `${HOME}/.claude/sessions`
 
 // Claude Code's session registry as measured on 2026-10-29: one file per
@@ -299,9 +321,9 @@ const SESSIONS = `${HOME}/.claude/sessions`
 const entry = (pid: number, tmux: string, status: string, startedAt: number, kind = 'interactive') =>
   JSON.stringify({ pid, sessionId: `s-${pid}`, kind, entrypoint: 'cli', status, startedAt, statusUpdatedAt: startedAt, tmux })
 
-// The registry beneath the mod, listed in the order of `files`.
+// The registry beneath the mod, listed in the order of `files`; `start` gives
+// the environment that finds it.
 function fakeRegistry(on: On, files: Record<string, string>) {
-  mock.env(on, { HOME })
   on('fs.list', (_, e) => ({
     value: Object.keys(files)
       .filter(path => path.startsWith(`${e.path}/`))
@@ -344,8 +366,8 @@ test('each Claude session ends with its state: Active green, Needs you bold yell
   expect(await suffix(ui, ' -- Idle')).toMatchObject({ color: 'white', dimColor: false })
   // the fields this fake answers, in its order: the mark sits before the title
   const listing = tmux.ran.find(argv => argv[1] === 'list-panes')
-  expect(listing?.slice(0, 4)).toEqual(['tmux', 'list-panes', '-s', '-F'])
-  expect(listing?.[4]?.split('\x1f')).toEqual([
+  expect(listing?.slice(0, 6)).toEqual(['tmux', 'list-panes', '-s', '-t', '%3', '-F'])
+  expect(listing?.[6]?.split('\x1f')).toEqual([
     '#{window_active}', '#{pane_active}', '#{window_id}', '#{pane_id}',
     '#{pane_current_command}', '#{@claude_state}', '#{pane_title}',
   ])
@@ -395,7 +417,6 @@ test('a pane marked active reads Active though its session is idle; a pending ma
 })
 
 test('with no readable registry every unmarked session is Idle and the list still draws', async ($, on) => {
-  mock.env(on, { HOME })
   on('fs.list', (_, e) => {
     throw new Error(`ENOENT: no such file or directory, scandir '${e.path}'`)
   })

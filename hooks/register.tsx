@@ -182,11 +182,15 @@ const isReady: Record<Agent, (command: string, title: string, isAlternate: boole
 }
 
 async function probe($: EngineInterface): Promise<TmuxSnapshot> {
+  // Outside tmux a running server still answers, for its most recently used
+  // session (tmux(1), target-session), so only TMUX_PANE says this session is
+  // in tmux, and its pane names the session to list.
+  const pane = await $.env.get('TMUX_PANE')
+  if (!pane) return { inTmux: false, rows: [] }
   let result
   try {
-    // -s lists every pane in the current session (all its windows); run outside
-    // tmux it exits non-zero, which we read as "not in a tmux session".
-    result = await $.process.run(['tmux', 'list-panes', '-s', '-F', FORMAT])
+    // -s lists every pane in that pane's session (all its windows).
+    result = await $.process.run(['tmux', 'list-panes', '-s', '-t', pane, '-F', FORMAT])
   } catch {
     return { inTmux: false, rows: [] }
   }
