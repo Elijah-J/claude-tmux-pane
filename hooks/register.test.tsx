@@ -65,6 +65,9 @@ function fakeTmux(on: On, readyAt = 1, extra: typeof PANES = []) {
     if (typed.startsWith('codex')) {
       p.command = 'codex'
       if (displays >= readyAt) alternate = '1'
+    } else if (typed.startsWith('claude-codex')) {
+      p.command = 'claude-codex'
+      if (displays >= readyAt) p.title = '✳ Claude Code'
     } else if (displays >= readyAt) Object.assign(p, { command: '2.1.312', title: '✳ Claude Code' })
 
     return `${p.command}\x1f${p.title}\x1f${alternate}\n`
@@ -278,6 +281,45 @@ test(
     tmux.unload()
   },
 )
+
+test(
+  'a [new] through claude-codex run waits for its ✳ title, then switches',
+  { options: { new_session_command: 'claude-codex run' } },
+  async ($, on) => {
+    const { clock, tmux } = await start($, on, 2)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    tmux.ran.length = 0
+
+    await ui.press({ key: 'new' })
+    expect(tmux.acts().some(argv => argv[1] === 'select-window')).toBe(false)
+
+    await clock.advance(150)
+    expect(tmux.acts()).toEqual([
+      NEW_WINDOW,
+      ['tmux', 'send-keys', '-t', '%7', '-l', 'claude-codex run'],
+      ['tmux', 'send-keys', '-t', '%7', 'Enter'],
+      DISPLAY,
+      DISPLAY,
+      ...SWITCH,
+    ])
+    await ui.unmount()
+    tmux.unload()
+  },
+)
+
+test('an interactive claude-codex pane lists as Claude Code; a headless one does not', async ($, on) => {
+  const extra = [
+    { window: '@8', pane: '%8', command: 'claude-codex', title: '✳ gateway session' },
+    { window: '@9', pane: '%9', command: 'claude-codex', title: 'host.local' },
+  ]
+  const { tmux } = await start($, on, 1, extra)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+
+  expect(await ui.find({ type: 'Text', text: /gateway session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /host\.local/ })).toBeUndefined()
+  await ui.unmount()
+  tmux.unload()
+})
 
 test('[new] spins until the new session waits for input, then switches', async ($, on) => {
   const { clock, tmux } = await start($, on, 3)

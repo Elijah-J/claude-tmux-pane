@@ -19,7 +19,7 @@ When you're juggling several Claude Code sessions across tmux windows and panes,
 
 - Codex has no mods, so a Codex window can't draw this list itself. Set **Codex window list command** to a program that draws it in a terminal pane, such as `tmux-roster`, and a Codex window you bring to the front, or start with `[new]`, gets it in a pane beside Codex, as wide as this pane, unless a pane of that window already carries the `@claude_roster` option set to `1`. The new pane is marked so at once. Empty (the default), Codex windows get none. Its clicks need `set -g mouse on` in `~/.tmux.conf`.
 
-A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. Headless and subagent sessions aren't tmux panes, so they don't appear.
+A pane is detected as Claude Code by its tmux `pane_current_command`, which Claude Code reports as its version string (e.g. `2.1.312`), and as Codex where it reports `codex`; an ordinary shell reports `zsh`/`bash` and is ignored. A session started by `claude-codex run` reports `claude-codex`, and counts as Claude Code once its title opens with `✳`, which a headless one in a pane never does. Subagent sessions aren't tmux panes, so they don't appear.
 
 ## Session state
 
@@ -57,7 +57,7 @@ claude plugin install tmux --marketplace Elijah-J/claude-tmux-pane
 
 The pane opens automatically when a session starts. Run `/tmux` any time to reopen it.
 
-`[new]` types `claude` (under `Codex`, `codex`) into the new window's shell, in the working directory of the session you clicked it from. To start sessions another way (with flags, say), set **New session command** or **New Codex session command** in `/config`, or from a shell:
+`[new]` types `claude` (under `Codex`, `codex`) into the new window's shell, in the working directory of the session you clicked it from. To start sessions another way (with flags, or through `claude-codex run`, say), set **New session command** or **New Codex session command** in `/config`, or from a shell:
 
 ```
 echo '{"new_session_command": "claude --model opus", "new_codex_command": "codex", "codex_roster_command": "tmux-roster"}' | claude plugin configure tmux@claude-tmux-pane --values-stdin

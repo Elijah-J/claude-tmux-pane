@@ -144,12 +144,16 @@ let cwd: string | undefined
 
 // A tmux pane running Claude Code reports its version (e.g. "2.1.312") as the
 // current command; a plain shell reports "zsh"/"bash", so this filters out the
-// non-Claude windows and panes.
-const isClaude = (command: string) => /^\d+\.\d+\.\d+/.test(command.trim())
+// non-Claude windows and panes. Under `claude-codex run` the command stays
+// `claude-codex`, and only the ✳ title tells an interactive Claude Code from a
+// headless one, whose pane keeps the shell's title (measured 2026-10-31).
+const isClaude = (command: string, title: string) =>
+  /^\d+\.\d+\.\d+/.test(command.trim()) ||
+  (command.trim() === 'claude-codex' && title.startsWith('✳'))
 
 // A tmux pane running the Codex CLI reports `codex` (measured 2026-10-30).
-function agentOf(command: string): Agent | null {
-  if (isClaude(command)) return 'claude'
+function agentOf(command: string, title: string): Agent | null {
+  if (isClaude(command, title)) return 'claude'
   if (command.trim() === 'codex') return 'codex'
 
   return null
@@ -177,8 +181,8 @@ const AGENT_NAME: Record<Agent, string> = { claude: 'Claude Code', codex: 'Codex
 // but writes its own title only when its session is up, 4 to 20 s in (measured
 // 2026-10-30), so its screen is the sign.
 const isReady: Record<Agent, (command: string, title: string, isAlternate: boolean) => boolean> = {
-  claude: (command, title) => isClaude(command) && title.startsWith('✳'),
-  codex: (command, _title, isAlternate) => agentOf(command) === 'codex' && isAlternate,
+  claude: (command, title) => isClaude(command, title) && title.startsWith('✳'),
+  codex: (command, title, isAlternate) => agentOf(command, title) === 'codex' && isAlternate,
 }
 
 async function probe($: EngineInterface): Promise<TmuxSnapshot> {
@@ -210,7 +214,7 @@ async function probe($: EngineInterface): Promise<TmuxSnapshot> {
         ...rest
       ] = line.split(SEP)
       const title = (rest.join(SEP) || id).trim()
-      const agent = agentOf(command)
+      const agent = agentOf(command, title)
       return {
         id,
         windowId,
